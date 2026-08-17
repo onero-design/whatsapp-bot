@@ -7,7 +7,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
-# --- CONFIGURAZIONE DATABASE ---
+# --- CONFIGURAZIONE DATABASE E GEMINI ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -38,64 +38,52 @@ class Messaggio(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# --- FUNZIONE CHIAMATA IA GEMINI ---
+# --- CHIAMATA IA CORRETTA ---
 def genera_risposta_gemini(messaggio_utente: str) -> str:
     if not GEMINI_API_KEY:
-        return "Servizio IA temporaneamente non disponibile (chiave API mancante)."
+        return "Servizio IA non disponibile (chiave API mancante)."
     
+    # Endpoint corretto v1beta per gemini-1.5-flash
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     
-    prompt_sistema = (
+    prompt = (
         "Sei un assistente virtuale professionale e cordiale per un'azienda. "
-        "Rispondi in modo sintetico, chiaro e utile ai clienti su WhatsApp. "
-        "Ecco il messaggio del cliente: "
+        "Rispondi in modo sintetico, chiaro e cortese ai clienti su WhatsApp. "
+        f"Messaggio del cliente: {messaggio_utente}"
     )
     
     payload = {
         "contents": [{
-            "parts": [{"text": prompt_sistema + messaggio_utente}]
+            "parts": [{"text": prompt}]
         }]
     }
     
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        url, 
+        data=data, 
+        headers={"Content-Type": "application/json"}
+    )
     
     try:
         with urllib.request.urlopen(req) as response:
             res_body = json.loads(response.read().decode("utf-8"))
             return res_body["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception as e:
-        return "Grazie per averci scritto! Un nostro operatore ti risponderà al più presto."
+        print(f"Errore Gemini: {e}")
+        return "Grazie per il messaggio! Un nostro operatore ti risponderà al più presto."
 
-# --- FASTAPI ---
+# --- FASTAPI APP ---
 app = FastAPI()
 
 @app.get("/")
 def home():
-    return {"status": "ok", "message": "WhatsApp AI Bot attivo"}
-
-@app.get("/contatti-salvati")
-def leggi_contatti():
-    db = SessionLocal()
-    try:
-        contatti = db.query(Contatto).all()
-        esito = []
-        for c in contatti:
-            esito.append({
-                "id": c.id,
-                "numero": c.numero_whatsapp,
-                "stato": c.stato,
-                "data_creazione": c.creato_il
-            })
-        return {"totale": len(esito), "contatti": esito}
-    finally:
-        db.close()
+    return {"status": "ok", "message": "WhatsApp Bot Attivo"}
 
 @app.post("/whatsapp-webhook")
 def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
     db = SessionLocal()
     try:
-        # 1. Trova o crea contatto
         contatto = db.query(Contatto).filter(Contatto.numero_whatsapp == From).first()
         if not contatto:
             contatto = Contatto(numero_whatsapp=From)
@@ -103,21 +91,17 @@ def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
             db.commit()
             db.refresh(contatto)
 
-        # 2. Salva messaggio utente
         db.add(Messaggio(contatto_id=contatto.id, direzione="INBOUND", testo=Body))
         db.commit()
 
-        # 3. Genera risposta con Gemini IA
         risposta_testo = genera_risposta_gemini(Body)
 
-        # 4. Salva risposta del bot
         db.add(Messaggio(contatto_id=contatto.id, direzione="OUTBOUND", testo=risposta_testo))
         db.commit()
 
     finally:
         db.close()
 
-    # 5. Invia a WhatsApp
     resp = MessagingResponse()
     resp.message(risposta_testo)
     return Response(content=str(resp), media_type="application/xml")
