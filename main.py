@@ -48,6 +48,23 @@ app = FastAPI()
 def home():
     return {"status": "ok", "message": "WhatsApp CRM Bot attivo con Database"}
 
+@app.get("/contatti-salvati")
+def leggi_contatti():
+    db = SessionLocal()
+    try:
+        contatti = db.query(Contatto).all()
+        esito = []
+        for c in contatti:
+            esito.append({
+                "id": c.id,
+                "numero": c.numero_whatsapp,
+                "stato": c.stato,
+                "data_creazione": c.creato_il
+            })
+        return {"totale": len(esito), "contatti": esito}
+    finally:
+        db.close()
+
 @app.post("/whatsapp-webhook")
 def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
     db = SessionLocal()
