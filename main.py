@@ -43,7 +43,7 @@ def genera_risposta_gemini(messaggio_utente: str) -> str:
     if not GEMINI_API_KEY:
         return "Servizio IA non disponibile (chiave API mancante)."
     
-    # Endpoint corretto v1beta per gemini-1.5-flash
+    # Endpoint aggiornato v1beta per Gemini 1.5 Flash
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     
     prompt = (
@@ -71,7 +71,16 @@ def genera_risposta_gemini(messaggio_utente: str) -> str:
             return res_body["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception as e:
         print(f"Errore Gemini: {e}")
-        return "Grazie per il messaggio! Un nostro operatore ti risponderà al più presto."
+        # Se fallisce per qualsiasi motivo, prova l'endpoint di fallback per Gemini 2.5
+        try:
+            url_fallback = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+            req_fb = urllib.request.Request(url_fallback, data=data, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req_fb) as response_fb:
+                res_body_fb = json.loads(response_fb.read().decode("utf-8"))
+                return res_body_fb["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except Exception as e2:
+            print(f"Errore Fallback Gemini: {e2}")
+            return "Grazie per il messaggio! Un nostro operatore ti risponderà al più presto."
 
 # --- FASTAPI APP ---
 app = FastAPI()
