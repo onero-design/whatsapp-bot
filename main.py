@@ -1,84 +1,104 @@
-from fastapi import FastAPI, Depends, Form, HTTPException, Response
-from sqlalchemy import create_engine, Column, Integer, String, DateTime
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
-from twilio.rest import Client
+import os
+from datetime import datetime
+from fastapi import FastAPI, Form, Response
 from twilio.twiml.messaging_response import MessagingResponse
-import datetime
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
-# --- CONFIGURAZIONE DATABASE (SQLite) ---
-DATABASE_URL = "sqlite:///./contatti.db"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# --- CONFIGURAZIONE DATABASE ---
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Render usa "postgres://", SQLAlchemy richiede "postgresql://"
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-class ContattoDB(Base):
+# --- MODELLI CRM (TABELLE) ---
+class Contatto(Base):
     __tablename__ = "contatti"
 
     id = Column(Integer, primary_key=True, index=True)
-    nome = Column(String, nullable=False)
-    telefono = Column(String, nullable=False)
-    data_creazione = Column(DateTime, default=datetime.datetime.utcnow)
+    numero_whatsapp = Column(String, unique=True, index=True, nullable=False)
+    stato = Column(String, default="Nuovo Lead")
+    creato_il = Column(DateTime, default=datetime.utcnow)
 
+    messaggi = relationship("Messaggio", back_populates="contatto")
+
+class Messaggio(Base):
+    __tablename__ = "messaggi"
+
+    id = Column(Integer, primary_key=True, index=True)
+    contatto_id = Column(Integer, ForeignKey("contatti.id"))
+    direzione = Column(String)  # 'INBOUND' (ricevuto) o 'OUTBOUND' (inviato dal bot)
+    testo = Column(Text, nullable=False)
+    inviato_il = Column(DateTime, default=datetime.utcnow)
+
+    contatto = relationship("Contatto", back_populates="messaggi")
+
+# Crea le tabelle nel database PostgreSQL
 Base.metadata.create_all(bind=engine)
 
-def get_db():
+# --- APPLICAZIONE FASTAPI ---
+app = FastAPI()
+
+@app.get("/")
+def home():
+    return {"status": "ok", "message": "WhatsApp CRM Bot attivo con Database"}
+
+@app.post("/whatsapp-webhook")
+def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
     db = SessionLocal()
     try:
-        yield db
+        # 1. Cerca o crea il contatto nel CRM
+        contatto = db.query(Contatto).filter(Contatto.numero_whatsapp == From).first()
+        if not contatto:
+            contatto = Contatto(numero_whatsapp=From)
+            db.add(contatto)
+            db.commit()
+            db.refresh(contatto)
+
+        # 2. Salva il messaggio ricevuto
+        messaggio_in = Messaggio(
+            contatto_id=contatto.id,
+            direzione="INBOUND",
+            testo=Body
+        )
+        db.add(messaggio_in)
+
+        # 3. Logica di risposta del bot
+        messaggio_utente = Body.strip().upper()
+        
+        if "PREZZO" in messaggio_utente:
+            risposta_testo = "👋 Ciao! I nostri servizi partono da 49€/mese. Rispondi 'INFO' per parlare con un consulente!"
+        elif "ORARI" in messaggio_utente:
+            risposta_testo = "🕒 Siamo aperti dal lunedì al venerdì dalle 9:00 alle 18:00."
+        elif "INFO" in messaggio_utente:
+            risposta_testo = "Perfetto! Un nostro consulente la ricontatterà a breve su questo numero."
+            contatto.stato = "Richiesta Info"
+        else:
+            risposta_testo = (
+                "Ciao! Grazie per averci scritto. Come possiamo aiutarti oggi?\n"
+                "1. Scrivi 'PREZZO' per i costi\n"
+                "2. Scrivi 'ORARI' per gli orari\n"
+                "3. Scrivi 'INFO' per parlare con noi"
+            )
+
+        # 4. Salva la risposta inviata dal bot
+        messaggio_out = Messaggio(
+            contatto_id=contatto.id,
+            direzione="OUTBOUND",
+            testo=risposta_testo
+        )
+        db.add(messaggio_out)
+        db.commit()
+
     finally:
         db.close()
 
-
-# --- CONFIGURAZIONE FASTAPI E TWILIO ---
-app = FastAPI(title="Backend WhatsApp & Webhook Auto-Responder")
-
-TWILIO_ACCOUNT_SID = "ACc9e1f12f5ee591f0e66edffeaac0a9a0"
-TWILIO_AUTH_TOKEN = "4996d8e14d4abd4c237c023718b57492"
-MITTENTE_TWILIO = "whatsapp:+4915888623971"
-
-client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-
-
-# --- WEBHOOK PER MESSAGGI IN ARRIVO (CHATBOT AUTOMATICO) ---
-@app.post("/whatsapp-webhook")
-async def whatsapp_webhook(
-    From: str = Form(...),
-    Body: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    # pulizia del numero mittente (es. "whatsapp:+393331234567" -> "+393331234567")
-    numero_mittente = From.replace("whatsapp:", "").strip()
-    testo_ricevuto = Body.strip().lower()
-
-    print(f"📩 Messaggio ricevuto da {numero_mittente}: {Body}")
-
-    # 1. Cerca o crea il contatto nel Database
-    contatto = db.query(ContattoDB).filter(ContattoDB.telefono == numero_mittente).first()
-    if not contatto:
-        contatto = ContattoDB(nome="Cliente WhatsApp", telefono=numero_mittente)
-        db.add(contatto)
-        db.commit()
-        db.refresh(contatto)
-
-    # 2. Logica di risposta automatica del Chatbot
+    # 5. Genera la risposta TwiML in formato XML per Twilio
     resp = MessagingResponse()
-
-    if "prezzo" in testo_ricevuto or "costo" in testo_ricevuto or "quanto" in testo_ricevuto:
-        risposta_testo = "👋 Ciao! I nostri servizi partono da 49€/mese. Rispondi 'INFO' per parlare con un consulente!"
-    elif "info" in testo_ricevuto or "consulente" in testo_ricevuto:
-        risposta_testo = f"Perfetto! Un nostro consulente la ricontatterà a breve su questo numero."
-    elif "orari" in testo_ricevuto or "aperti" in testo_ricevuto:
-        risposta_testo = "📍 Siamo aperti dal Lunedì al Venerdì dalle 9:00 alle 18:00."
-    else:
-        risposta_testo = f"Ciao! Grazie per averci scritto. Come possiamo aiutarti oggi?\n1. Scrivi 'PREZZO' per i costi\n2. Scrivi 'ORARI' per gli orari\n3. Scrivi 'INFO' per parlare con noi"
-
-    # Genera la risposta TWiML per Twilio
     resp.message(risposta_testo)
     return Response(content=str(resp), media_type="application/xml")
-
-
-# --- ENDPOINT CONSULTAZIONE CONTATTI ---
-@app.get("/contatti")
-def lista_contatti(db: Session = Depends(get_db)):
-    contatti = db.query(ContattoDB).all()
-    return {"totale": len(contatti), "contatti": contatti}
