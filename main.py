@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, Form, HTTPException
+from fastapi import FastAPI, Depends, Form, HTTPException, Response
 from sqlalchemy import create_engine, Column, Integer, String, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from twilio.rest import Client
@@ -74,7 +74,7 @@ async def whatsapp_webhook(
 
     # Genera la risposta TWiML per Twilio
     resp.message(risposta_testo)
-    return str(resp)
+    return Response(content=str(resp), media_type="application/xml")
 
 
 # --- ENDPOINT CONSULTAZIONE CONTATTI ---
