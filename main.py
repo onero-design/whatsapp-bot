@@ -51,7 +51,7 @@ class Messaggio(Base):
     inviato_il = Column(DateTime, default=datetime.utcnow)
     
     contatto = relationship("Contatto", back_populates="messaggi")
-
+Base.metadata.drop_all(bind=engine)
 Base.metadata.create_all(bind=engine)
 
 # --- DIPENDENZA DATABASE ---
