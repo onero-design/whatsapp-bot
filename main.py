@@ -1,11 +1,10 @@
 import os
-import json
-import urllib.request
 from datetime import datetime
 from fastapi import FastAPI, Form, Response
 from twilio.twiml.messaging_response import MessagingResponse
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from google import genai
 
 # --- CONFIGURAZIONE DATABASE E GEMINI ---
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -17,6 +16,9 @@ if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+# --- INIZIALIZZAZIONE CLIENT GEMINI ---
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 # --- MODELLI DATABASE ---
 class Contatto(Base):
@@ -38,13 +40,10 @@ class Messaggio(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# --- CHIAMATA IA CORRETTA ---
+# --- CHIAMATA IA TRAMITE SDK UFFICIALE ---
 def genera_risposta_gemini(messaggio_utente: str) -> str:
-    if not GEMINI_API_KEY:
+    if not client:
         return "Servizio IA non disponibile (chiave API mancante)."
-    
-    # Endpoint aggiornato v1beta per Gemini 1.5 Flash
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     
     prompt = (
         "Sei un assistente virtuale professionale e cordiale per un'azienda. "
@@ -52,35 +51,15 @@ def genera_risposta_gemini(messaggio_utente: str) -> str:
         f"Messaggio del cliente: {messaggio_utente}"
     )
     
-    payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }]
-    }
-    
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url, 
-        data=data, 
-        headers={"Content-Type": "application/json"}
-    )
-    
     try:
-        with urllib.request.urlopen(req) as response:
-            res_body = json.loads(response.read().decode("utf-8"))
-            return res_body["candidates"][0]["content"]["parts"][0]["text"].strip()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        return response.text.strip()
     except Exception as e:
-        print(f"Errore Gemini: {e}")
-        # Se fallisce per qualsiasi motivo, prova l'endpoint di fallback per Gemini 2.5
-        try:
-            url_fallback = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-            req_fb = urllib.request.Request(url_fallback, data=data, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req_fb) as response_fb:
-                res_body_fb = json.loads(response_fb.read().decode("utf-8"))
-                return res_body_fb["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except Exception as e2:
-            print(f"Errore Fallback Gemini: {e2}")
-            return "Grazie per il messaggio! Un nostro operatore ti risponderà al più presto."
+        print(f"Errore Gemini SDK: {e}")
+        return "Grazie per il messaggio! Un nostro operatore ti risponderà al più presto."
 
 # --- FASTAPI APP ---
 app = FastAPI()
