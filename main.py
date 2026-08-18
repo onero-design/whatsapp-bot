@@ -40,7 +40,7 @@ class Messaggio(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# --- CHIAMATA IA TRAMITE SDK UFFICIALE ---
+# --- CHIAMATA IA CON FALLBACK AUTOMATICO ---
 def genera_risposta_gemini(messaggio_utente: str) -> str:
     if not client:
         return "Servizio IA non disponibile (chiave API mancante)."
@@ -51,6 +51,7 @@ def genera_risposta_gemini(messaggio_utente: str) -> str:
         f"Messaggio del cliente: {messaggio_utente}"
     )
     
+    # Prova prima con Gemini 3.6 Flash
     try:
         response = client.models.generate_content(
             model="gemini-3.6-flash",
@@ -58,8 +59,17 @@ def genera_risposta_gemini(messaggio_utente: str) -> str:
         )
         return response.text.strip()
     except Exception as e:
-        print(f"Errore Gemini SDK: {e}")
-        return "Grazie per il messaggio! Un nostro operatore ti risponderà al più presto."
+        print(f"Errore Gemini 3.6 Flash: {e}")
+        # Fallback immediato a Gemini 1.5 Flash in caso di picco di traffico (503)
+        try:
+            response = client.models.generate_content(
+                model="gemini-1.5-flash",
+                contents=prompt,
+            )
+            return response.text.strip()
+        except Exception as e2:
+            print(f"Errore Gemini 1.5 Flash: {e2}")
+            return "Grazie per il messaggio! Un nostro operatore ti risponderà al più presto."
 
 # --- FASTAPI APP ---
 app = FastAPI()
