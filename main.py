@@ -40,18 +40,31 @@ class Messaggio(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# --- CHIAMATA IA CON FALLBACK AUTOMATICO ---
-def genera_risposta_gemini(messaggio_utente: str) -> str:
+# --- CHIAMATA IA CON MEMORIA E FALLBACK ---
+def genera_risposta_gemini(numero_utente: str, messaggio_attuale: str, db_session) -> str:
     if not client:
-        return "Servizio IA non disponibile (chiave API mancante)."
+        return "Servizio IA temporaneamente non disponibile."
+
+    # Recupera gli ultimi 6 messaggi dello specifico utente dal DB
+    storico = db_session.query(Messaggio).filter(
+        Messaggio.numero_utente == numero_utente
+    ).order_by(Messaggio.timestamp.desc()).limit(6).all()
+    
+    storico.reverse()
+
+    conversazione = ""
+    for msg in storico:
+        ruolo = "Cliente" if msg.ruolo == "user" else "Assistente"
+        conversazione += f"{ruolo}: {msg.testo}\n"
     
     prompt = (
-        "Sei un assistente virtuale professionale e cordiale per un'azienda. "
-        "Rispondi in modo sintetico, chiaro e cortese ai clienti su WhatsApp. "
-        f"Messaggio del cliente: {messaggio_utente}"
+        "Sei un assistente virtuale professionale per l'azienda. "
+        "Rispondi al cliente in modo cordiale, chiaro e sintetico basandoti sulla cronologia della conversazione.\n\n"
+        f"--- CRONOLOGIA CHAT ---\n{conversazione}"
+        f"Cliente: {messaggio_attuale}\n"
+        "Assistente:"
     )
-    
-    # Prova prima con Gemini 3.6 Flash
+
     try:
         response = client.models.generate_content(
             model="gemini-3.6-flash",
@@ -60,7 +73,6 @@ def genera_risposta_gemini(messaggio_utente: str) -> str:
         return response.text.strip()
     except Exception as e:
         print(f"Errore Gemini 3.6 Flash: {e}")
-        # Fallback immediato a Gemini 1.5 Flash in caso di picco di traffico (503)
         try:
             response = client.models.generate_content(
                 model="gemini-1.5-flash",
@@ -69,8 +81,7 @@ def genera_risposta_gemini(messaggio_utente: str) -> str:
             return response.text.strip()
         except Exception as e2:
             print(f"Errore Gemini 1.5 Flash: {e2}")
-            return "Grazie per il messaggio! Un nostro operatore ti risponderà al più presto."
-
+            return "Grazie per il messaggio! Un operatore ti risponderà a breve."
 # --- FASTAPI APP ---
 app = FastAPI()
 
@@ -78,28 +89,26 @@ app = FastAPI()
 def home():
     return {"status": "ok", "message": "WhatsApp Bot Attivo"}
 
+# --- WEBHOOK TWILIO ---
 @app.post("/whatsapp-webhook")
-def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
-    db = SessionLocal()
-    try:
-        contatto = db.query(Contatto).filter(Contatto.numero_whatsapp == From).first()
-        if not contatto:
-            contatto = Contatto(numero_whatsapp=From)
-            db.add(contatto)
-            db.commit()
-            db.refresh(contatto)
+async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...), db: Session = Depends(get_db)):
+    numero_utente = From
+    messaggio_utente = Body.strip()
 
-        db.add(Messaggio(contatto_id=contatto.id, direzione="INBOUND", testo=Body))
-        db.commit()
+    # Salva il messaggio dell'utente nel DB
+    msg_user = Messaggio(numero_utente=numero_utente, ruolo="user", testo=messaggio_utente)
+    db.add(msg_user)
+    db.commit()
 
-        risposta_testo = genera_risposta_gemini(Body)
+    # Genera la risposta usando la memoria
+    risposta_ia = genera_risposta_gemini(numero_utente, messaggio_utente, db)
 
-        db.add(Messaggio(contatto_id=contatto.id, direzione="OUTBOUND", testo=risposta_testo))
-        db.commit()
+    # Salva la risposta dell'IA nel DB
+    msg_bot = Messaggio(numero_utente=numero_utente, ruolo="assistant", testo=risposta_ia)
+    db.add(msg_bot)
+    db.commit()
 
-    finally:
-        db.close()
-
+    # Risposta formattata per Twilio TwiML
     resp = MessagingResponse()
-    resp.message(risposta_testo)
+    resp.message(risposta_ia)
     return Response(content=str(resp), media_type="application/xml")
