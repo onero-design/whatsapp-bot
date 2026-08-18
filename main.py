@@ -1,9 +1,9 @@
 import os
 from datetime import datetime
-from fastapi import FastAPI, Form, Response
+from fastapi import FastAPI, Form, Response, Depends
 from twilio.twiml.messaging_response import MessagingResponse
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship, Session
 from google import genai
 
 # --- CONFIGURAZIONE DATABASE E GEMINI ---
@@ -33,28 +33,36 @@ class Messaggio(Base):
     __tablename__ = "messaggi"
     id = Column(Integer, primary_key=True, index=True)
     contatto_id = Column(Integer, ForeignKey("contatti.id"))
-    direzione = Column(String)  # 'INBOUND' o 'OUTBOUND'
+    direzione = Column(String)  # 'INBOUND' (cliente) o 'OUTBOUND' (bot)
     testo = Column(Text, nullable=False)
     inviato_il = Column(DateTime, default=datetime.utcnow)
     contatto = relationship("Contatto", back_populates="messaggi")
 
 Base.metadata.create_all(bind=engine)
 
+# --- DIPENDENZA DATABASE PER FASTAPI ---
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
 # --- CHIAMATA IA CON MEMORIA E FALLBACK ---
-def genera_risposta_gemini(numero_utente: str, messaggio_attuale: str, db_session) -> str:
+def genera_risposta_gemini(contatto: Contatto, messaggio_attuale: str, db_session: Session) -> str:
     if not client:
         return "Servizio IA temporaneamente non disponibile."
 
-    # Recupera gli ultimi 6 messaggi dello specifico utente dal DB
+    # Recupera gli ultimi 6 messaggi del contatto
     storico = db_session.query(Messaggio).filter(
-        Messaggio.numero_utente == numero_utente
-    ).order_by(Messaggio.timestamp.desc()).limit(6).all()
+        Messaggio.contatto_id == contatto.id
+    ).order_by(Messaggio.inviato_il.desc()).limit(6).all()
     
     storico.reverse()
 
     conversazione = ""
     for msg in storico:
-        ruolo = "Cliente" if msg.ruolo == "user" else "Assistente"
+        ruolo = "Cliente" if msg.direzione == "INBOUND" else "Assistente"
         conversazione += f"{ruolo}: {msg.testo}\n"
     
     prompt = (
@@ -82,6 +90,7 @@ def genera_risposta_gemini(numero_utente: str, messaggio_attuale: str, db_sessio
         except Exception as e2:
             print(f"Errore Gemini 1.5 Flash: {e2}")
             return "Grazie per il messaggio! Un operatore ti risponderà a breve."
+
 # --- FASTAPI APP ---
 app = FastAPI()
 
@@ -95,20 +104,28 @@ async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...), db: Ses
     numero_utente = From
     messaggio_utente = Body.strip()
 
-    # Salva il messaggio dell'utente nel DB
-    msg_user = Messaggio(numero_utente=numero_utente, ruolo="user", testo=messaggio_utente)
+    # Recupera o crea il contatto
+    contatto = db.query(Contatto).filter(Contatto.numero_whatsapp == numero_utente).first()
+    if not contatto:
+        contatto = Contatto(numero_whatsapp=numero_utente)
+        db.add(contatto)
+        db.commit()
+        db.refresh(contatto)
+
+    # Salva il messaggio in entrata
+    msg_user = Messaggio(contatto_id=contatto.id, direzione="INBOUND", testo=messaggio_utente)
     db.add(msg_user)
     db.commit()
 
-    # Genera la risposta usando la memoria
-    risposta_ia = genera_risposta_gemini(numero_utente, messaggio_utente, db)
+    # Genera la risposta dell'IA con la memoria dei messaggi precedenti
+    risposta_ia = genera_risposta_gemini(contatto, messaggio_utente, db)
 
-    # Salva la risposta dell'IA nel DB
-    msg_bot = Messaggio(numero_utente=numero_utente, ruolo="assistant", testo=risposta_ia)
+    # Salva la risposta in uscita
+    msg_bot = Messaggio(contatto_id=contatto.id, direzione="OUTBOUND", testo=risposta_ia)
     db.add(msg_bot)
     db.commit()
 
-    # Risposta formattata per Twilio TwiML
+    # Risposta formattata per Twilio
     resp = MessagingResponse()
     resp.message(risposta_ia)
     return Response(content=str(resp), media_type="application/xml")
