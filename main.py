@@ -72,19 +72,19 @@ def genera_risposta_gemini(contatto: Contatto, messaggio_attuale: str, db_sessio
         "Assistente:"
     )
 
-    # 1. Tentativo principale con Gemini 1.5 Flash
+    # 1. Tentativo con Gemini 2.5 Flash
     try:
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
         )
         return response.text.strip()
     except Exception as e:
-        print(f"Errore Gemini 1.5 Flash: {e}")
-        # 2. Fallback su Gemini 1.5 Flash 8B (ancora più veloce)
+        print(f"Errore Gemini 2.5 Flash: {e}")
+        # 2. Fallback su Gemini 2.5 Lite
         try:
             response = client.models.generate_content(
-                model="gemini-1.5-flash-8b",
+                model="gemini-2.5-flash-lite",
                 contents=prompt,
             )
             return response.text.strip()
