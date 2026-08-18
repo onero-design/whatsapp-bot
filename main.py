@@ -53,7 +53,6 @@ def genera_risposta_gemini(contatto: Contatto, messaggio_attuale: str, db_sessio
     if not client:
         return "Servizio IA temporaneamente non disponibile."
 
-    # Recupera gli ultimi 6 messaggi del contatto
     storico = db_session.query(Messaggio).filter(
         Messaggio.contatto_id == contatto.id
     ).order_by(Messaggio.inviato_il.desc()).limit(6).all()
@@ -73,24 +72,25 @@ def genera_risposta_gemini(contatto: Contatto, messaggio_attuale: str, db_sessio
         "Assistente:"
     )
 
+    # 1. Tentativo principale con Gemini 1.5 Flash
     try:
         response = client.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-1.5-flash",
             contents=prompt,
         )
         return response.text.strip()
     except Exception as e:
-        print(f"Errore Gemini 3.6 Flash: {e}")
+        print(f"Errore Gemini 1.5 Flash: {e}")
+        # 2. Fallback su Gemini 1.5 Flash 8B (ancora più veloce)
         try:
             response = client.models.generate_content(
-                model="gemini-1.5-flash",
+                model="gemini-1.5-flash-8b",
                 contents=prompt,
             )
             return response.text.strip()
         except Exception as e2:
-            print(f"Errore Gemini 1.5 Flash: {e2}")
+            print(f"Errore Fallback: {e2}")
             return "Grazie per il messaggio! Un operatore ti risponderà a breve."
-
 # --- FASTAPI APP ---
 app = FastAPI()
 
