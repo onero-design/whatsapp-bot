@@ -36,3 +36,4 @@ psycopg2-binary
 sqlalchemy
 google-genai
 jinja2
+apscheduler
