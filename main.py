@@ -5,6 +5,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, Session
 from google import genai
+from google.genai import types
 
 # --- CONFIGURAZIONE DATABASE E GEMINI ---
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -17,7 +18,6 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# --- INIZIALIZZAZIONE CLIENT GEMINI ---
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 # --- MODELLI DATABASE ---
@@ -26,10 +26,11 @@ class Azienda(Base):
     id = Column(Integer, primary_key=True, index=True)
     nome = Column(String, nullable=False)
     numero_whatsapp_business = Column(String, unique=True, index=True)
-    istruzioni_ia = Column(Text, nullable=False)  # Prompt personalizzato (orari, servizi, regole)
+    istruzioni_ia = Column(Text, nullable=False)
     creato_il = Column(DateTime, default=datetime.utcnow)
     
     contatti = relationship("Contatto", back_populates="azienda")
+    slot = relationship("SlotAgenda", back_populates="azienda")
 
 class Contatto(Base):
     __tablename__ = "contatti"
@@ -46,15 +47,25 @@ class Messaggio(Base):
     __tablename__ = "messaggi"
     id = Column(Integer, primary_key=True, index=True)
     contatto_id = Column(Integer, ForeignKey("contatti.id"))
-    direzione = Column(String)  # 'INBOUND' o 'OUTBOUND'
+    direzione = Column(String)
     testo = Column(Text, nullable=False)
     inviato_il = Column(DateTime, default=datetime.utcnow)
     
     contatto = relationship("Contatto", back_populates="messaggi")
 
+class SlotAgenda(Base):
+    __tablename__ = "slot_agenda"
+    id = Column(Integer, primary_key=True, index=True)
+    azienda_id = Column(Integer, ForeignKey("aziende.id"))
+    data_ora = Column(String, nullable=False, index=True) # Formato YYYY-MM-DD HH:MM
+    stato = Column(String, default="Disponibile") # 'Disponibile', 'Occupato'
+    cliente_nome = Column(String, nullable=True)
+    servizio = Column(String, nullable=True)
+    
+    azienda = relationship("Azienda", back_populates="slot")
+
 Base.metadata.create_all(bind=engine)
 
-# --- DIPENDENZA DATABASE ---
 def get_db():
     db = SessionLocal()
     try:
@@ -62,35 +73,75 @@ def get_db():
     finally:
         db.close()
 
-# --- CHIAMATA IA DINAMICA ---
+# --- FUNZIONI STRUMENTO (TOOLS PER GEMINI) ---
+def cerca_slot_disponibile(azienda_id: int, data_ora: str, db: Session) -> str:
+    slot = db.query(SlotAgenda).filter(
+        SlotAgenda.azienda_id == azienda_id,
+        SlotAgenda.data_ora == data_ora
+    ).first()
+    
+    if not slot or slot.stato == "Disponibile":
+        return f"Lo slot per il {data_ora} è DISPONIBILE."
+    return f"Lo slot per il {data_ora} è già OCCUPATO."
+
+def fissa_appuntamento(azienda_id: int, data_ora: str, servizio: str, nome_cliente: str, db: Session) -> str:
+    slot = db.query(SlotAgenda).filter(
+        SlotAgenda.azienda_id == azienda_id,
+        SlotAgenda.data_ora == data_ora
+    ).first()
+    
+    if not slot:
+        slot = SlotAgenda(azienda_id=azienda_id, data_ora=data_ora, stato="Occupato", cliente_nome=nome_cliente, servizio=servizio)
+        db.add(slot)
+    else:
+        slot.stato = "Occupato"
+        slot.cliente_nome = nome_cliente
+        slot.servizio = servizio
+        
+    db.commit()
+    return f"Appuntamento confermato con successo per {nome_cliente} in data {data_ora} per il servizio {servizio}."
+
+# --- GENERAZIONE RISPOSTA CON TOOL USE ---
 def genera_risposta_gemini(azienda: Azienda, contatto: Contatto, messaggio_attuale: str, db_session: Session) -> str:
     if not client:
-        return "Servizio IA temporaneamente non disponibile."
+        return "Servizio IA non disponibile."
 
-    # Recupera gli ultimi 6 messaggi dello specifico contatto
     storico = db_session.query(Messaggio).filter(
         Messaggio.contatto_id == contatto.id
     ).order_by(Messaggio.inviato_il.desc()).limit(6).all()
-    
     storico.reverse()
 
     conversazione = ""
     for msg in storico:
         ruolo = "Cliente" if msg.direzione == "INBOUND" else "Assistente"
         conversazione += f"{ruolo}: {msg.testo}\n"
-    
+
     prompt = (
+        f"Data e Ora attuale: {datetime.now().strftime('%Y-%m-%d %H:%M')}.\n"
         f"Sei l'assistente virtuale di {azienda.nome}.\n"
-        f"ISTRUZIONI E REGOLE AZIENDALI:\n{azienda.istruzioni_ia}\n\n"
-        f"--- CRONOLOGIA CHAT ---\n{conversazione}"
+        f"ISTRUZIONI AZIENDALI:\n{azienda.istruzioni_ia}\n\n"
+        f"CRONOLOGIA CHAT:\n{conversazione}"
         f"Cliente: {messaggio_attuale}\n"
         "Assistente:"
     )
+
+    # Definizione strumenti per Gemini
+    def verifica_disponibilita(data_ora: str) -> str:
+        """Verifica se una specifica data e ora (formato YYYY-MM-DD HH:MM) è libera per un appuntamento."""
+        return cerca_slot_disponibile(azienda.id, data_ora, db_session)
+
+    def prenota_appuntamento(data_ora: str, servizio: str, nome_cliente: str) -> str:
+        """Prenota un appuntamento registrando data_ora (YYYY-MM-DD HH:MM), servizio e nome del cliente."""
+        return fissa_appuntamento(azienda.id, data_ora, servizio, nome_cliente, db_session)
 
     try:
         response = client.models.generate_content(
             model="gemini-3.5-flash",
             contents=prompt,
+            config=types.GenerateContentConfig(
+                tools=[verifica_disponibilita, prenota_appuntamento],
+                temperature=0.3
+            )
         )
         return response.text.strip()
     except Exception as e:
@@ -99,36 +150,37 @@ def genera_risposta_gemini(azienda: Azienda, contatto: Contatto, messaggio_attua
             response = client.models.generate_content(
                 model="gemini-3.5-flash-lite",
                 contents=prompt,
+                config=types.GenerateContentConfig(
+                    tools=[verifica_disponibilita, prenota_appuntamento],
+                    temperature=0.3
+                )
             )
             return response.text.strip()
         except Exception as e2:
             print(f"Errore Fallback: {e2}")
             return "Grazie per il messaggio! Un operatore ti risponderà a breve."
 
-# --- FASTAPI APP ---
+# --- APP FASTAPI & WEBHOOK ---
 app = FastAPI()
 
 @app.get("/")
 def home():
-    return {"status": "ok", "message": "WhatsApp Bot Multi-Tenant Attivo"}
+    return {"status": "ok", "message": "WhatsApp Bot Multi-Tenant + Agenda Attivo"}
 
-# --- WEBHOOK TWILIO ---
 @app.post("/whatsapp-webhook")
 async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str = Form(...), db: Session = Depends(get_db)):
     numero_cliente = From
     numero_business = To
     messaggio_utente = Body.strip()
 
-    # 1. Trova l'azienda associata al numero di WhatsApp Business ricevente
     azienda = db.query(Azienda).filter(Azienda.numero_whatsapp_business == numero_business).first()
-    
-    # Se l'azienda non esiste ancora nel DB, ne creiamo una di default per i test
     if not azienda:
         istruzioni_default = (
+            "Sei l'assistente della Barberia Demo.\n"
             "Servizi: Taglio uomo (20€), Barba (15€), Taglio+Barba (30€).\n"
             "Orari: Mar-Sab dalle 9:00 alle 19:00.\n"
-            "Indirizzo: Via Roma 10, Milano.\n"
-            "Regola: Sii sempre cordiale, rispondi alle domande e proponi di fissare un appuntamento."
+            "Regola: Quando chiedono di prenotare, verifica la disponibilità con lo strumento appropriato "
+            "e chiedi sempre il nome prima di confermare la prenotazione."
         )
         azienda = Azienda(
             nome="Barberia Demo",
@@ -139,7 +191,6 @@ async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str
         db.commit()
         db.refresh(azienda)
 
-    # 2. Recupera o crea il contatto per questa specifica azienda
     contatto = db.query(Contatto).filter(
         Contatto.numero_whatsapp == numero_cliente,
         Contatto.azienda_id == azienda.id
@@ -151,17 +202,12 @@ async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str
         db.commit()
         db.refresh(contatto)
 
-    # 3. Salva messaggio in entrata
-    msg_user = Messaggio(contatto_id=contatto.id, direzione="INBOUND", testo=messaggio_utente)
-    db.add(msg_user)
+    db.add(Messaggio(contatto_id=contatto.id, direzione="INBOUND", testo=messaggio_utente))
     db.commit()
 
-    # 4. Genera risposta dinamica
     risposta_ia = genera_risposta_gemini(azienda, contatto, messaggio_utente, db)
 
-    # 5. Salva risposta in uscita
-    msg_bot = Messaggio(contatto_id=contatto.id, direzione="OUTBOUND", testo=risposta_ia)
-    db.add(msg_bot)
+    db.add(Messaggio(contatto_id=contatto.id, direzione="OUTBOUND", testo=risposta_ia))
     db.commit()
 
     resp = MessagingResponse()
