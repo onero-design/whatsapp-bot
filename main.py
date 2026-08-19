@@ -1,17 +1,21 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import FastAPI, Form, Response, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from twilio.twiml.messaging_response import MessagingResponse
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text
+from twilio.rest import Client as TwilioClient
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, Session
 from google import genai
 from google.genai import types
+from jinja2 import Template
+from apscheduler.schedulers.background import BackgroundScheduler
 
-# --- CONFIGURAZIONE DATABASE E GEMINI ---
+# --- CONFIGURAZIONE AMBIENTE ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -59,10 +63,12 @@ class SlotAgenda(Base):
     __tablename__ = "slot_agenda"
     id = Column(Integer, primary_key=True, index=True)
     azienda_id = Column(Integer, ForeignKey("aziende.id"))
-    data_ora = Column(String, nullable=False, index=True) # Formato YYYY-MM-DD HH:MM
-    stato = Column(String, default="Disponibile") # 'Disponibile', 'Occupato'
+    data_ora = Column(String, nullable=False, index=True)  # Formato YYYY-MM-DD HH:MM
+    stato = Column(String, default="Disponibile")
     cliente_nome = Column(String, nullable=True)
+    numero_cliente = Column(String, nullable=True)  # Indispensabile per inviare il promemoria
     servizio = Column(String, nullable=True)
+    notifica_inviata = Column(Boolean, default=False)
     
     azienda = relationship("Azienda", back_populates="slot")
 
@@ -75,7 +81,7 @@ def get_db():
     finally:
         db.close()
 
-# --- FUNZIONI TOOL PER GEMINI ---
+# --- FUNZIONI STRUMENTI PER GEMINI ---
 def cerca_slot_disponibile(azienda_id: int, data_ora: str, db: Session) -> str:
     slot = db.query(SlotAgenda).filter(
         SlotAgenda.azienda_id == azienda_id,
@@ -86,24 +92,75 @@ def cerca_slot_disponibile(azienda_id: int, data_ora: str, db: Session) -> str:
         return f"Lo slot per il {data_ora} è DISPONIBILE."
     return f"Lo slot per il {data_ora} è già OCCUPATO."
 
-def fissa_appuntamento(azienda_id: int, data_ora: str, servizio: str, nome_cliente: str, db: Session) -> str:
+def fissa_appuntamento(azienda_id: int, data_ora: str, servizio: str, nome_cliente: str, numero_cliente: str, db: Session) -> str:
     slot = db.query(SlotAgenda).filter(
         SlotAgenda.azienda_id == azienda_id,
         SlotAgenda.data_ora == data_ora
     ).first()
     
     if not slot:
-        slot = SlotAgenda(azienda_id=azienda_id, data_ora=data_ora, stato="Occupato", cliente_nome=nome_cliente, servizio=servizio)
+        slot = SlotAgenda(
+            azienda_id=azienda_id, 
+            data_ora=data_ora, 
+            stato="Occupato", 
+            cliente_nome=nome_cliente, 
+            numero_cliente=numero_cliente,
+            servizio=servizio
+        )
         db.add(slot)
     else:
         slot.stato = "Occupato"
         slot.cliente_nome = nome_cliente
+        slot.numero_cliente = numero_cliente
         slot.servizio = servizio
         
     db.commit()
     return f"Appuntamento confermato con successo per {nome_cliente} in data {data_ora} per il servizio {servizio}."
 
-# --- GENERAZIONE RISPOSTA CON IA ---
+# --- PROMEMORIA AUTOMATICI ---
+def invia_promemoria_automatici():
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+        return
+
+    db = SessionLocal()
+    try:
+        ora_corrente = datetime.now()
+        prossima_finestra = ora_corrente + timedelta(hours=2)
+        
+        appuntamenti_da_notificare = db.query(SlotAgenda).filter(
+            SlotAgenda.stato == "Occupato",
+            SlotAgenda.notifica_inviata == False
+        ).all()
+
+        twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+        for slot in appuntamenti_da_notificare:
+            try:
+                data_appuntamento = datetime.strptime(slot.data_ora, "%Y-%m-%d %H:%M")
+                if ora_corrente < data_appuntamento <= prossima_finestra and slot.numero_cliente:
+                    azienda = db.query(Azienda).filter(Azienda.id == slot.azienda_id).first()
+                    
+                    messaggio_txt = (
+                        f"Ciao {slot.cliente_nome}! Ti ricordiamo il tuo appuntamento "
+                        f"per '{slot.servizio}' oggi alle {data_appuntamento.strftime('%H:%M')} presso {azienda.nome}. A presto!"
+                    )
+                    
+                    twilio_client.messages.create(
+                        body=messaggio_txt,
+                        from_=azienda.numero_whatsapp_business,
+                        to=slot.numero_cliente
+                    )
+                    
+                    slot.notifica_inviata = True
+                    db.commit()
+            except Exception as inner_e:
+                print(f"Errore parsing/invio slot {slot.id}: {inner_e}")
+    except Exception as e:
+        print(f"Errore Promemoria: {e}")
+    finally:
+        db.close()
+
+# --- MOTORE RISPOSTA GEMINI ---
 def genera_risposta_gemini(azienda: Azienda, contatto: Contatto, messaggio_attuale: str, db_session: Session) -> str:
     if not client:
         return "Servizio IA non disponibile."
@@ -128,43 +185,42 @@ def genera_risposta_gemini(azienda: Azienda, contatto: Contatto, messaggio_attua
     )
 
     def verifica_disponibilita(data_ora: str) -> str:
-        """Verifica se una specifica data e ora (formato YYYY-MM-DD HH:MM) è libera per un appuntamento."""
+        """Verifica se una data_ora (YYYY-MM-DD HH:MM) è libera."""
         return cerca_slot_disponibile(azienda.id, data_ora, db_session)
 
     def prenota_appuntamento(data_ora: str, servizio: str, nome_cliente: str) -> str:
-        """Prenota un appuntamento registrando data_ora (YYYY-MM-DD HH:MM), servizio e nome del cliente."""
-        return fissa_appuntamento(azienda.id, data_ora, servizio, nome_cliente, db_session)
+        """Prenota un appuntamento inserendo data_ora (YYYY-MM-DD HH:MM), servizio e il nome del cliente."""
+        return fissa_appuntamento(azienda.id, data_ora, servizio, nome_cliente, contatto.numero_whatsapp, db_session)
+
+    tools_list = [verifica_disponibilita, prenota_appuntamento]
 
     try:
         response = client.models.generate_content(
             model="gemini-3.5-flash",
             contents=prompt,
-            config=types.GenerateContentConfig(
-                tools=[verifica_disponibilita, prenota_appuntamento],
-                temperature=0.3
-            )
+            config=types.GenerateContentConfig(tools=tools_list, temperature=0.3)
         )
         return response.text.strip()
     except Exception as e:
-        print(f"Errore Gemini 3.5 Flash: {e}")
         try:
             response = client.models.generate_content(
                 model="gemini-3.5-flash-lite",
                 contents=prompt,
-                config=types.GenerateContentConfig(
-                    tools=[verifica_disponibilita, prenota_appuntamento],
-                    temperature=0.3
-                )
+                config=types.GenerateContentConfig(tools=tools_list, temperature=0.3)
             )
             return response.text.strip()
         except Exception as e2:
-            print(f"Errore Fallback: {e2}")
             return "Grazie per il messaggio! Un operatore ti risponderà a breve."
 
 # --- APP FASTAPI ---
 app = FastAPI()
 
-# --- DASHBOARD HTML (Jinja2 integrato) ---
+# Schedulatore promemoria (controlla ogni 15 minuti)
+scheduler = BackgroundScheduler()
+scheduler.add_job(invia_promemoria_automatici, 'interval', minutes=15)
+scheduler.start()
+
+# --- TEMPLATE HTML DASHBOARD ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="it">
@@ -179,7 +235,7 @@ HTML_TEMPLATE = """
         <h1 class="mb-4">Pannello di Controllo - {{ azienda.nome }}</h1>
         
         <div class="row">
-            <!-- COLONNA PROMPT AZIENDALE -->
+            <!-- ISTRUZIONI E REGOLE PROMPT -->
             <div class="col-md-5 mb-4">
                 <div class="card shadow-sm">
                     <div class="card-header bg-primary text-white">
@@ -201,7 +257,7 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            <!-- COLONNA AGENDA ED APPUNTAMENTI -->
+            <!-- TABELLA APPUNTAMENTI -->
             <div class="col-md-7">
                 <div class="card shadow-sm">
                     <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
@@ -267,11 +323,8 @@ def get_dashboard(azienda_id: int, db: Session = Depends(get_db)):
         SlotAgenda.stato == "Occupato"
     ).all()
 
-    # Rendering manuale senza cartella templates esterna
-    from jinja2 import Template
     template = Template(HTML_TEMPLATE)
     html_content = template.render(azienda=azienda, appuntamenti=appuntamenti)
-    
     return HTMLResponse(content=html_content)
 
 @app.post("/dashboard/{azienda_id}/update-prompt")
@@ -291,7 +344,7 @@ def delete_slot(azienda_id: int, slot_id: int, db: Session = Depends(get_db)):
         db.commit()
     return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=303)
 
-# --- WEBHOOK TWILIO ---
+# --- WEBHOOK WHATSAPP (TWILIO) ---
 @app.post("/whatsapp-webhook")
 async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str = Form(...), db: Session = Depends(get_db)):
     numero_cliente = From
@@ -301,14 +354,14 @@ async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str
     azienda = db.query(Azienda).filter(Azienda.numero_whatsapp_business == numero_business).first()
     if not azienda:
         istruzioni_default = (
-            "Sei l'assistente della Barberia Demo.\n"
-            "Servizi: Taglio uomo (20€), Barba (15€), Taglio+Barba (30€).\n"
-            "Orari: Mar-Sab dalle 9:00 alle 19:00.\n"
-            "Regola: Quando chiedono di prenotare, verifica la disponibilità con lo strumento appropriato "
-            "e chiedi sempre il nome prima di confermarne l'inserimento."
+            "Sei l'assistente della Pasticceria.\n"
+            "Servizi: Torte 1kg (10€), Torte 2kg (15€), Cornetti (1.50€).\n"
+            "Orari: Lun-Sab dalle 7:00 alle 19:00.\n"
+            "Regola: Quando chiedono di prenotare, verifica prima la disponibilità "
+            "e chiedi sempre il nome per la conferma."
         )
         azienda = Azienda(
-            nome="Barberia Demo",
+            nome="Pasticceria Demo",
             numero_whatsapp_business=numero_business,
             istruzioni_ia=istruzioni_default
         )
