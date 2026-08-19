@@ -1,6 +1,8 @@
 import os
 from datetime import datetime
-from fastapi import FastAPI, Form, Response, Depends
+from fastapi import FastAPI, Form, Response, Depends, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
 from twilio.twiml.messaging_response import MessagingResponse
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, Session
@@ -73,7 +75,7 @@ def get_db():
     finally:
         db.close()
 
-# --- FUNZIONI STRUMENTO (TOOLS PER GEMINI) ---
+# --- FUNZIONI TOOL PER GEMINI ---
 def cerca_slot_disponibile(azienda_id: int, data_ora: str, db: Session) -> str:
     slot = db.query(SlotAgenda).filter(
         SlotAgenda.azienda_id == azienda_id,
@@ -101,7 +103,7 @@ def fissa_appuntamento(azienda_id: int, data_ora: str, servizio: str, nome_clien
     db.commit()
     return f"Appuntamento confermato con successo per {nome_cliente} in data {data_ora} per il servizio {servizio}."
 
-# --- GENERAZIONE RISPOSTA CON TOOL USE ---
+# --- GENERAZIONE RISPOSTA CON IA ---
 def genera_risposta_gemini(azienda: Azienda, contatto: Contatto, messaggio_attuale: str, db_session: Session) -> str:
     if not client:
         return "Servizio IA non disponibile."
@@ -125,7 +127,6 @@ def genera_risposta_gemini(azienda: Azienda, contatto: Contatto, messaggio_attua
         "Assistente:"
     )
 
-    # Definizione strumenti per Gemini
     def verifica_disponibilita(data_ora: str) -> str:
         """Verifica se una specifica data e ora (formato YYYY-MM-DD HH:MM) è libera per un appuntamento."""
         return cerca_slot_disponibile(azienda.id, data_ora, db_session)
@@ -160,13 +161,137 @@ def genera_risposta_gemini(azienda: Azienda, contatto: Contatto, messaggio_attua
             print(f"Errore Fallback: {e2}")
             return "Grazie per il messaggio! Un operatore ti risponderà a breve."
 
-# --- APP FASTAPI & WEBHOOK ---
+# --- APP FASTAPI ---
 app = FastAPI()
 
-@app.get("/")
-def home():
-    return {"status": "ok", "message": "WhatsApp Bot Multi-Tenant + Agenda Attivo"}
+# --- DASHBOARD HTML (Jinja2 integrato) ---
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - {{ azienda.nome }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+    <div class="container py-5">
+        <h1 class="mb-4">Pannello di Controllo - {{ azienda.nome }}</h1>
+        
+        <div class="row">
+            <!-- COLONNA PROMPT AZIENDALE -->
+            <div class="col-md-5 mb-4">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="card-title mb-0">Istruzioni IA (Prompt)</h5>
+                    </div>
+                    <div class="card-body">
+                        <form action="/dashboard/{{ azienda.id }}/update-prompt" method="post">
+                            <div class="mb-3">
+                                <label class="form-label">Nome Attività</label>
+                                <input type="text" name="nome" class="form-control" value="{{ azienda.nome }}" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Regole, Orari e Listino Servizi</label>
+                                <textarea name="istruzioni_ia" class="form-control" rows="10" required>{{ azienda.istruzioni_ia }}</textarea>
+                            </div>
+                            <button type="submit" class="btn btn-success w-100">Salva Modifiche</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
 
+            <!-- COLONNA AGENDA ED APPUNTAMENTI -->
+            <div class="col-md-7">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                        <h5 class="card-title mb-0">Appuntamenti Prenotati</h5>
+                        <span class="badge bg-success">{{ appuntamenti|length }} Prenotazioni</span>
+                    </div>
+                    <div class="card-body">
+                        {% if appuntamenti %}
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Data e Ora</th>
+                                        <th>Cliente</th>
+                                        <th>Servizio</th>
+                                        <th>Azione</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for slot in appuntamenti %}
+                                    <tr>
+                                        <td><strong>{{ slot.data_ora }}</strong></td>
+                                        <td>{{ slot.cliente_nome or 'N/D' }}</td>
+                                        <td><span class="badge bg-info text-dark">{{ slot.servizio or 'Generale' }}</span></td>
+                                        <td>
+                                            <form action="/dashboard/{{ azienda.id }}/delete-slot/{{ slot.id }}" method="post" style="display:inline;">
+                                                <button type="submit" class="btn btn-sm btn-outline-danger">Cancella</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        {% else %}
+                        <p class="text-muted text-center py-4">Nessun appuntamento registrato al momento.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+# --- ROTTE DASHBOARD WEB ---
+@app.get("/", response_class=HTMLResponse)
+def home(db: Session = Depends(get_db)):
+    azienda = db.query(Azienda).first()
+    if azienda:
+        return f"<h2>Bot Attivo! <a href='/dashboard/{azienda.id}'>Accedi alla Dashboard</a></h2>"
+    return "<h2>Bot Attivo! Invia prima un messaggio WhatsApp per configurare l'azienda automatica.</h2>"
+
+@app.get("/dashboard/{azienda_id}", response_class=HTMLResponse)
+def get_dashboard(azienda_id: int, db: Session = Depends(get_db)):
+    azienda = db.query(Azienda).filter(Azienda.id == azienda_id).first()
+    if not azienda:
+        return HTMLResponse(content="Azienda non trovata", status_code=404)
+
+    appuntamenti = db.query(SlotAgenda).filter(
+        SlotAgenda.azienda_id == azienda_id,
+        SlotAgenda.stato == "Occupato"
+    ).all()
+
+    # Rendering manuale senza cartella templates esterna
+    from jinja2 import Template
+    template = Template(HTML_TEMPLATE)
+    html_content = template.render(azienda=azienda, appuntamenti=appuntamenti)
+    
+    return HTMLResponse(content=html_content)
+
+@app.post("/dashboard/{azienda_id}/update-prompt")
+def update_prompt(azienda_id: int, nome: str = Form(...), istruzioni_ia: str = Form(...), db: Session = Depends(get_db)):
+    azienda = db.query(Azienda).filter(Azienda.id == azienda_id).first()
+    if azienda:
+        azienda.nome = nome
+        azienda.istruzioni_ia = istruzioni_ia
+        db.commit()
+    return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=303)
+
+@app.post("/dashboard/{azienda_id}/delete-slot/{slot_id}")
+def delete_slot(azienda_id: int, slot_id: int, db: Session = Depends(get_db)):
+    slot = db.query(SlotAgenda).filter(SlotAgenda.id == slot_id, SlotAgenda.azienda_id == azienda_id).first()
+    if slot:
+        db.delete(slot)
+        db.commit()
+    return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=303)
+
+# --- WEBHOOK TWILIO ---
 @app.post("/whatsapp-webhook")
 async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str = Form(...), db: Session = Depends(get_db)):
     numero_cliente = From
@@ -180,7 +305,7 @@ async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str
             "Servizi: Taglio uomo (20€), Barba (15€), Taglio+Barba (30€).\n"
             "Orari: Mar-Sab dalle 9:00 alle 19:00.\n"
             "Regola: Quando chiedono di prenotare, verifica la disponibilità con lo strumento appropriato "
-            "e chiedi sempre il nome prima di confermare la prenotazione."
+            "e chiedi sempre il nome prima di confermarne l'inserimento."
         )
         azienda = Azienda(
             nome="Barberia Demo",
