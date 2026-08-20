@@ -176,7 +176,7 @@ def genera_risposta_gemini(azienda: Azienda, contatto: Contatto, messaggio_attua
         conversazione += f"{ruolo}: {msg.testo}\n"
 
     prompt = (
-        f"Data e Ora attuale: {datetime.now().strftime('%Y-%m-%d %H:%M')}.\n"
+        f"Data e Ora attuale: {datetime.now().strftime('%d-%m-%Y %H:%M')}.\n"
         f"Sei l'assistente virtuale di {azienda.nome}.\n"
         f"ISTRUZIONI AZIENDALI:\n{azienda.istruzioni_ia}\n\n"
         f"CRONOLOGIA CHAT:\n{conversazione}"
