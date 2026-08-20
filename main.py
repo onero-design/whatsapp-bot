@@ -71,7 +71,7 @@ class SlotAgenda(Base):
     notifica_inviata = Column(Boolean, default=False)
     
     azienda = relationship("Azienda", back_populates="slot")
-Base.metadata.drop_all(bind=engine)
+#Base.metadata.drop_all(bind=engine)
 Base.metadata.create_all(bind=engine)
 
 def get_db():
