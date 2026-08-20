@@ -279,7 +279,7 @@ HTML_TEMPLATE = """
                                 <tbody>
                                     {% for slot in appuntamenti %}
                                     <tr>
-                                        <td><strong>{{ slot.data_ora }}</strong></td>
+                                        <td><strong>{{ slot.data_ora.split(' ')[0].split('-')[2] }}/{{ slot.data_ora.split(' ')[0].split('-')[1] }}/{{ slot.data_ora.split(' ')[0].split('-')[0] }} {{ slot.data_ora.split(' ')[1] }}</strong></td>
                                         <td>{{ slot.cliente_nome or 'N/D' }}</td>
                                         <td><span class="badge bg-info text-dark">{{ slot.servizio or 'Generale' }}</span></td>
                                         <td>
