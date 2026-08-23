@@ -7,8 +7,6 @@ from ai_service import genera_risposta_gemini
 router = APIRouter(prefix="/instagram", tags=["Instagram"])
 
 VERIFY_TOKEN = os.getenv("INSTAGRAM_VERIFY_TOKEN", "mio_token_segreto")
-PAGE_ACCESS_TOKEN = os.getenv("INSTAGRAM_PAGE_ACCESS_TOKEN")
-INSTAGRAM_ACCOUNT_ID = os.getenv("INSTAGRAM_ACCOUNT_ID")
 
 
 def get_instagram_routes(
@@ -34,6 +32,10 @@ def get_instagram_routes(
     ):
         data = await request.json()
 
+        # Legge le variabili d'ambiente aggiornate al momento della chiamata
+        page_access_token = os.getenv("INSTAGRAM_PAGE_ACCESS_TOKEN", "").strip()
+        instagram_account_id = os.getenv("INSTAGRAM_ACCOUNT_ID", "").strip()
+
         if data.get("object") == "instagram":
             for entry in data.get("entry", []):
                 for messaging in entry.get("messaging", []):
@@ -44,7 +46,7 @@ def get_instagram_routes(
                     if (
                         sender_id
                         and message_text
-                        and sender_id != INSTAGRAM_ACCOUNT_ID
+                        and sender_id != instagram_account_id
                     ):
 
                         azienda = db.query(AziendaModel).first()
@@ -101,19 +103,16 @@ def get_instagram_routes(
                         db.commit()
 
                         # Invio risposta su Instagram Direct
-                        # Invio risposta su Instagram Direct
-                        if PAGE_ACCESS_TOKEN and INSTAGRAM_ACCOUNT_ID:
-                            token_pulito = PAGE_ACCESS_TOKEN.strip()
-                            url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/messages"
-                            headers = {
-                                "Content-Type": "application/json",
-                                "Authorization": f"Bearer {token_pulito}"
+                        if page_access_token and instagram_account_id:
+                            url = f"https://graph.facebook.com/v18.0/{instagram_account_id}/messages"
+                            params = {
+                                "access_token": page_access_token
                             }
                             payload = {
                                 "recipient": {"id": sender_id},
                                 "message": {"text": risposta_ia}
                             }
-                            res = requests.post(url, json=payload, headers=headers)
+                            res = requests.post(url, json=payload, params=params)
                             print("Risposta Meta Graph API:", res.json())
 
         return Response(content="EVENT_RECEIVED", status_code=200)
