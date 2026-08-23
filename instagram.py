@@ -103,13 +103,17 @@ def get_instagram_routes(
                         # Invio risposta su Instagram Direct
                         # Invio risposta su Instagram Direct
                         if PAGE_ACCESS_TOKEN and INSTAGRAM_ACCOUNT_ID:
+                            token_pulito = PAGE_ACCESS_TOKEN.strip()
                             url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/messages"
-                            params = {"access_token": PAGE_ACCESS_TOKEN.strip()}
+                            headers = {
+                                "Content-Type": "application/json",
+                                "Authorization": f"Bearer {token_pulito}"
+                            }
                             payload = {
                                 "recipient": {"id": sender_id},
-                                "message": {"text": risposta_ia},
+                                "message": {"text": risposta_ia}
                             }
-                            res = requests.post(url, json=payload, params=params)
+                            res = requests.post(url, json=payload, headers=headers)
                             print("Risposta Meta Graph API:", res.json())
 
         return Response(content="EVENT_RECEIVED", status_code=200)
