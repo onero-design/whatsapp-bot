@@ -9,3 +9,4 @@ python-multipart
 apscheduler
 email-validator
 requests
+openai>=1.0.0
