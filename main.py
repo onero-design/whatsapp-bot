@@ -1,6 +1,8 @@
 import os
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Form, Response, Depends
+from fastapi import FastAPI, Form, Response, Depends, BackgroundTasks, HTTPException
+from pydantic import BaseModel, EmailStr
+from mailer import send_email
 from fastapi.responses import HTMLResponse
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client as TwilioClient
@@ -185,3 +187,14 @@ async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str
     resp = MessagingResponse()
     resp.message(risposta_ia)
     return Response(content=str(resp), media_type="application/xml")
+    
+    
+class EmailSchema(BaseModel):
+    to_email: EmailStr
+    subject: str
+    body: str
+
+@app.post("/send-mail/")
+async def send_mail_endpoint(payload: EmailSchema, background_tasks: BackgroundTasks):
+    background_tasks.add_task(send_email, payload.to_email, payload.subject, payload.body)
+    return {"status": "success", "message": "Email presa in carico e in fase di invio."}
