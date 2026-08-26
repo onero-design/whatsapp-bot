@@ -1,5 +1,4 @@
 import os
-import json
 from datetime import datetime
 from google import genai
 from google.genai import types
@@ -44,7 +43,7 @@ def fissa_appuntamento(azienda_id: int, data_ora: str, servizio: str, nome_clien
     db.commit()
     return f"Appuntamento confermato con successo per {nome_cliente} in data {data_ora} per il servizio {servizio}."
 
-# --- MOTORE DI RISPOSTA IA WHATSAPP ---
+# --- MOTORE DI RISPOSTA IA ---
 def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session: Session, SlotAgenda, Messaggio) -> str:
     if not client:
         return "Servizio IA non disponibile."
@@ -82,7 +81,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.5-flash",
             contents=prompt,
             config=types.GenerateContentConfig(tools=tools_list, temperature=0.3)
         )
@@ -90,7 +89,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
     except Exception:
         try:
             response = client.models.generate_content(
-                model="gemini-1.5-flash",
+                model="gemini-3.5-flash-lite",
                 contents=prompt,
                 config=types.GenerateContentConfig(tools=tools_list, temperature=0.3)
             )
@@ -98,46 +97,31 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         except Exception:
             return "Grazie per il messaggio! Un operatore ti risponderà a breve."
 
-def risposta_ia_whatsapp(messaggio_utente: str, istruzioni_azienda: str, slot_disponibili: list = None) -> str:
-    """Wrapper per chiamate semplici senza DB/contatto."""
-    if not client:
-        return "Servizio IA non disponibile."
-    
-    prompt = f"ISTRUZIONI AZIENDALI:\n{istruzioni_azienda}\n\nMESSAGGIO CLIENTE:\n{messaggio_utente}"
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt
-        )
-        return response.text.strip()
-    except Exception:
-        return "Grazie per averci contattato! Ti risponderemo a breve."
-
-# --- GENERAZIONE EMAIL B2B ---
-def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
+def genera_bozza_email_b2b(target_company: str, target_industry: str, offerta_azienda: str) -> dict:
     if not client:
         return {"success": False, "error": "Servizio IA non disponibile."}
 
     prompt = f"""
     Sei un copywriter B2B esperto in cold outreach. 
-    Scrivi una mail di vendita professionale, breve (massimo 120 parole) e ad alto tasso di conversione per il seguente target: "{target_info}".
+    Scrivi una mail di vendita professionale, breve (massimo 120 parole) e ad alto tasso di conversione.
+
+    Dati destinatario:
+    - Nome Azienda: {target_company}
+    - Settore: {target_industry}
 
     La nostra offerta/prodotto:
     - {offerta_azienda}
 
-    Identifica anche il dominio web aziendale principale più probabile per "{target_info}" (es. se target è "Conad", il dominio è "conad.it").
-
     IMPORTANTE: Rispondi ESCLUSIVAMENTE con un oggetto JSON valido con questa struttura esatta:
     {{
         "subject": "Oggetto incisivo senza sembrare spam",
-        "body": "Testo dell'email formattato con a capo e una Call To Action finale",
-        "suggested_domain": "dominioipotizzato.it"
+        "body": "Testo dell'email formattato con a capo e una Call To Action finale"
     }}
     """
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.5-flash",
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -145,12 +129,12 @@ def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
             )
         )
         
+        import json
         data = json.loads(response.text.strip())
         return {
             "success": True,
             "subject": data.get("subject", ""),
-            "body": data.get("body", ""),
-            "domain": data.get("suggested_domain", "").lower()
+            "body": data.get("body", "")
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
