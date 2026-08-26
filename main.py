@@ -19,7 +19,7 @@ from instagram import get_instagram_routes
 DATABASE_URL = os.getenv("DATABASE_URL")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-HUNTER_API_KEY = os.getnv("HUNTER_API_KEY")
+HUNTER_API_KEY = os.getenv("HUNTER_API_KEY")
 
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
