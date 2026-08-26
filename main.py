@@ -237,3 +237,24 @@ async def find_domain_emails(payload: dict):
     
     emails = cerca_email_da_dominio(domain)
     return {"success": True, "domain": domain, "emails": emails, "count": len(emails)}
+
+class AutoDomainCampaignRequest(BaseModel):
+    domain: str
+    subject: str
+    body: str
+
+@app.post("/api/send-auto-domain-campaign")
+async def send_auto_domain_campaign(payload: AutoDomainCampaignRequest, background_tasks: BackgroundTasks):
+    emails = cerca_email_da_dominio(payload.domain)
+    
+    if not emails:
+        raise HTTPException(status_code=404, detail=f"Nessun indirizzo email trovato per il dominio {payload.domain}.")
+    
+    # Invia le email in background usando il tuo sistema di invio (es. Resend)
+    for email in emails:
+        background_tasks.add_task(send_email, email, payload.subject, payload.body)
+        
+    return {
+        "status": "success",
+        "message": f"🚀 Bot avviato! Email prese in carico e in corso di invio a {len(emails)} contatti del dominio {payload.domain}."
+    }
