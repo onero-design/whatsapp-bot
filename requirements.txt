@@ -4,6 +4,7 @@ sqlalchemy
 psycopg2-binary
 twilio
 google-genai
+google-auth
 jinja2
 python-multipart
 apscheduler
