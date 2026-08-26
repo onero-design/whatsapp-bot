@@ -1,6 +1,6 @@
 import os
-import socket
 import smtplib
+import socket
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -11,7 +11,7 @@ def send_email(to_email: str, subject: str, body: str) -> bool:
     sender_password = os.getenv("SMTP_PASSWORD")
 
     if not sender_email or not sender_password:
-        print("Errore: Credenziali SMTP mancanti nelle variabili d'ambiente.")
+        print("Errore: Credenziali SMTP mancanti.")
         return False
 
     message = MIMEMultipart()
@@ -21,10 +21,8 @@ def send_email(to_email: str, subject: str, body: str) -> bool:
     message.attach(MIMEText(body, "html"))
 
     try:
-        # Forziamo l'IP in versione IPv4 (AF_INET) per evitare errori di rete su Render
-        ip_v4 = socket.getaddrinfo(smtp_server, smtp_port, socket.AF_INET)[0][4][0]
-        
-        server = smtplib.SMTP_SSL(ip_v4, smtp_port, timeout=10)
+        # Aumentiamo il timeout a 30 secondi
+        server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30)
         server.login(sender_email, sender_password)
         server.send_message(message)
         server.quit()
