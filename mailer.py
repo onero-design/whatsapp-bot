@@ -2,11 +2,11 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import socket
 
 def send_email(to_email: str, subject: str, body: str) -> bool:
+    # Usiamo la porta 465 e il server Gmail standard
     smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", 587))
+    smtp_port = int(os.getenv("SMTP_PORT", 465))
     sender_email = os.getenv("SMTP_EMAIL")
     sender_password = os.getenv("SMTP_PASSWORD")
 
@@ -18,11 +18,11 @@ def send_email(to_email: str, subject: str, body: str) -> bool:
     message["From"] = sender_email
     message["To"] = to_email
     message["Subject"] = subject
-    message.attach(MIMEText(body, "html")) # Supporta anche formattazione HTML
+    message.attach(MIMEText(body, "html"))
 
     try:
-        server = smtplib.SMTP(socket.gethostbyname(smtp_server), smtp_port)
-        server.starttls()
+        # Usa SMTP_SSL invece di STARTTLS
+        server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10)
         server.login(sender_email, sender_password)
         server.send_message(message)
         server.quit()
