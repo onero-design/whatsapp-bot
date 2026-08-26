@@ -1,33 +1,35 @@
 import os
-import smtplib
-import socket
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import requests
 
 def send_email(to_email: str, subject: str, body: str) -> bool:
-    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", 465))
-    sender_email = os.getenv("SMTP_EMAIL")
-    sender_password = os.getenv("SMTP_PASSWORD")
+    api_key = os.getenv("RESEND_API_KEY")
+    sender_email = os.getenv("SMTP_EMAIL", "onboarding@resend.dev")
 
-    if not sender_email or not sender_password:
-        print("Errore: Credenziali SMTP mancanti.")
+    if not api_key:
+        print("Errore: RESEND_API_KEY non trovata nelle variabili d'ambiente.")
         return False
 
-    message = MIMEMultipart()
-    message["From"] = sender_email
-    message["To"] = to_email
-    message["Subject"] = subject
-    message.attach(MIMEText(body, "html"))
+    url = "https://api.resend.com/emails"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "from": f"Bot <{sender_email}>",
+        "to": [to_email],
+        "subject": subject,
+        "html": body
+    }
 
     try:
-        # Aumentiamo il timeout a 30 secondi
-        server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30)
-        server.login(sender_email, sender_password)
-        server.send_message(message)
-        server.quit()
-        print(f"Email inviata con successo a {to_email}")
-        return True
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        if response.status_code in [200, 201]:
+            print(f"Email inviata con successo a {to_email} via Resend API!")
+            return True
+        else:
+            print(f"Errore Resend API [{response.status_code}]: {response.text}")
+            return False
     except Exception as e:
-        print(f"Errore durante l'invio dell'email: {e}")
+        print(f"Errore durante la chiamata API di invio email: {e}")
         return False
