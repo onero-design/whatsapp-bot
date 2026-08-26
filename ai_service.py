@@ -97,7 +97,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         except Exception:
             return "Grazie per il messaggio! Un operatore ti risponderà a breve."
 
-def genera_bozza_email_b2b(target_company: str, target_industry: str, offerta_azienda: str) -> dict:
+def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
     if not client:
         return {"success": False, "error": "Servizio IA non disponibile."}
 
@@ -105,12 +105,15 @@ def genera_bozza_email_b2b(target_company: str, target_industry: str, offerta_az
     Sei un copywriter B2B esperto in cold outreach. 
     Scrivi una mail di vendita professionale, breve (massimo 120 parole) e ad alto tasso di conversione.
 
-    Dati destinatario:
-    - Nome Azienda: {target_company}
-    - Settore: {target_industry}
+    Destinatario/Target (può essere un'azienda specifica o un settore generale):
+    - Target: {target_info}
 
     La nostra offerta/prodotto:
     - {offerta_azienda}
+
+    ISTRUZIONI:
+    - Se il Target è un'azienda specifica (es. Conad), usala nel testo e personalizza la mail per loro.
+    - Se il Target è un settore generale (es. Supermercati), scrivi una mail adatta a quel settore usando formati generici come 'Gentile Titolare'.
 
     IMPORTANTE: Rispondi ESCLUSIVAMENTE con un oggetto JSON valido con questa struttura esatta:
     {{
@@ -119,22 +122,31 @@ def genera_bozza_email_b2b(target_company: str, target_industry: str, offerta_az
     }}
     """
 
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        temperature=0.7
+    )
+
+    import json
+
     try:
         response = client.models.generate_content(
             model="gemini-3.5-flash",
             contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.7
-            )
+            config=config
         )
-        
-        import json
         data = json.loads(response.text.strip())
-        return {
-            "success": True,
-            "subject": data.get("subject", ""),
-            "body": data.get("body", "")
-        }
+        return {"success": True, "subject": data.get("subject", ""), "body": data.get("body", "")}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        print(f"Modello principale non disponibile, provo il fallback: {e}")
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-3.5-flash-lite",
+            contents=prompt,
+            config=config
+        )
+        data = json.loads(response.text.strip())
+        return {"success": True, "subject": data.get("subject", ""), "body": data.get("body", "")}
+    except Exception as e:
+        return {"success": False, "error": f"Errore generazione: {str(e)}"}
