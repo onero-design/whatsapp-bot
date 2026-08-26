@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, Column, Integer, String, DateTime, Foreign
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, Session
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from ai_service import genera_risposta_gemini
+from ai_service import genera_risposta_gemini, genera_bozza_email_b2b
 from dashboard import get_dashboard_routes
 from instagram import get_instagram_routes
 
@@ -198,3 +198,18 @@ class EmailSchema(BaseModel):
 async def send_mail_endpoint(payload: EmailSchema, background_tasks: BackgroundTasks):
     background_tasks.add_task(send_email, payload.to_email, payload.subject, payload.body)
     return {"status": "success", "message": "Email presa in carico e in fase di invio."}
+
+# --- NUOVA SEZIONE: GENERATORE DI BOZZE EMAIL B2B CON IA ---
+class DraftEmailRequest(BaseModel):
+    target_company: str
+    target_industry: str
+    offerta_azienda: str
+
+@app.post("/api/generate-email-draft")
+async def generate_email_draft(data: DraftEmailRequest):
+    result = genera_bozza_email_b2b(
+        target_company=data.target_company,
+        target_industry=data.target_industry,
+        offerta_azienda=data.offerta_azienda
+    )
+    return result
