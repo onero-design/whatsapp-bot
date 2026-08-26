@@ -7,3 +7,4 @@ google-genai
 jinja2
 python-multipart
 apscheduler
+email-validator
