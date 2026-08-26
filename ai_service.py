@@ -96,3 +96,45 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
             return response.text.strip()
         except Exception:
             return "Grazie per il messaggio! Un operatore ti risponderà a breve."
+
+def genera_bozza_email_b2b(target_company: str, target_industry: str, offerta_azienda: str) -> dict:
+    if not client:
+        return {"success": False, "error": "Servizio IA non disponibile."}
+
+    prompt = f"""
+    Sei un copywriter B2B esperto in cold outreach. 
+    Scrivi una mail di vendita professionale, breve (massimo 120 parole) e ad alto tasso di conversione.
+
+    Dati destinatario:
+    - Nome Azienda: {target_company}
+    - Settore: {target_industry}
+
+    La nostra offerta/prodotto:
+    - {offerta_azienda}
+
+    IMPORTANTE: Rispondi ESCLUSIVAMENTE con un oggetto JSON valido con questa struttura esatta:
+    {{
+        "subject": "Oggetto incisivo senza sembrare spam",
+        "body": "Testo dell'email formattato con a capo e una Call To Action finale"
+    }}
+    """
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.7
+            )
+        )
+        
+        import json
+        data = json.loads(response.text.strip())
+        return {
+            "success": True,
+            "subject": data.get("subject", ""),
+            "body": data.get("body", "")
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
