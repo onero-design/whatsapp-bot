@@ -97,7 +97,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         except Exception:
             return "Grazie per il messaggio! Un operatore ti risponderà a breve."
 
-def genera_bozza_email_b2b(target_company: str, target_industry: str, offerta_azienda: str) -> dict:
+def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
     if not client:
         return {"success": False, "error": "Servizio IA non disponibile."}
 
@@ -106,8 +106,7 @@ def genera_bozza_email_b2b(target_company: str, target_industry: str, offerta_az
     Scrivi una mail di vendita professionale, breve (massimo 120 parole) e ad alto tasso di conversione.
 
     Dati destinatario:
-    - Nome Azienda: {target_company}
-    - Settore: {target_industry}
+    - Target: {target_info}
 
     La nostra offerta/prodotto:
     - {offerta_azienda}
@@ -118,6 +117,7 @@ def genera_bozza_email_b2b(target_company: str, target_industry: str, offerta_az
         "body": "Testo dell'email formattato con a capo e una Call To Action finale"
     }}
     """
+    # ... il resto della funzione resta identico al tuo codice originale
 
     try:
         response = client.models.generate_content(
