@@ -124,6 +124,7 @@ HTML_TEMPLATE = """
 
                             <div class="d-flex gap-2">
                                 <button type="button" class="btn btn-outline-secondary w-50" onclick="generaBozzaEmail()">🔄 Rigenera Bozza</button>
+                                <button type="button" class="btn btn-success w-50" id="btnInviaAuto" onclick="avviaCampagnaAutomatica()">🚀 2. Avvia Bot Invio su Dominio</button>
                             </div>
                             <div id="statusMessage" class="mt-2 text-center"></div>
                         </div>
@@ -209,6 +210,45 @@ HTML_TEMPLATE = """
             }
         } catch(e) {
             countDiv.innerHTML = '<span class="text-danger">Errore durante la ricerca delle email.</span>';
+        }
+    }
+
+    async function avviaCampagnaAutomatica() {
+        const domain = document.getElementById("targetDomain").value.trim();
+        const subject = document.getElementById("emailSubject").value;
+        const body = document.getElementById("emailBody").value;
+        const btnInvia = document.getElementById("btnInviaAuto");
+        const statusMsg = document.getElementById("statusMessage");
+
+        if(!domain) {
+            alert("Inserisci prima il dominio target!");
+            return;
+        }
+
+        btnInvia.disabled = true;
+        statusMsg.innerHTML = '<span class="text-info">⏳ Avvio bot e invio massivo in corso...</span>';
+
+        try {
+            const res = await fetch("/api/send-auto-domain-campaign", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    domain: domain,
+                    subject: subject,
+                    body: body
+                })
+            });
+
+            const data = await res.json();
+            if(res.ok) {
+                statusMsg.innerHTML = `<span class="text-success">✅ ${data.message}</span>`;
+            } else {
+                statusMsg.innerHTML = `<span class="text-danger">❌ Errore: ${data.detail || 'Impossibile avviare la campagna.'}</span>`;
+            }
+        } catch(e) {
+            statusMsg.innerHTML = '<span class="text-danger">❌ Errore di connessione con il server.</span>';
+        } finally {
+            btnInvia.disabled = false;
         }
     }
     </script>
