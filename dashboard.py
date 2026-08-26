@@ -19,10 +19,11 @@ HTML_TEMPLATE = """
         <h1 class="mb-4">Pannello di Controllo - {{ azienda.nome }}</h1>
         
         <div class="row">
+            <!-- ISTRUZIONI IA -->
             <div class="col-md-5 mb-4">
                 <div class="card shadow-sm">
                     <div class="card-header bg-primary text-white">
-                        <h5 class="card-title mb-0">Istruzioni IA (Prompt)</h5>
+                        <h5 class="card-title mb-0">Istruzioni IA WhatsApp</h5>
                     </div>
                     <div class="card-body">
                         <form action="/dashboard/{{ azienda.id }}/update-prompt" method="post">
@@ -41,7 +42,8 @@ HTML_TEMPLATE = """
             </div>
 
             <div class="col-md-7">
-                <div class="card shadow-sm">
+                <!-- APPUNTAMENTI PRENOTATI -->
+                <div class="card shadow-sm mb-4">
                     <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
                         <h5 class="card-title mb-0">Appuntamenti Prenotati</h5>
                         <span class="badge bg-success">{{ appuntamenti|length }} Prenotazioni</span>
@@ -79,9 +81,140 @@ HTML_TEMPLATE = """
                         {% endif %}
                     </div>
                 </div>
+
+                <!-- EMAIL MARKETING B2B CON IA -->
+                <div class="card shadow-sm">
+                    <div class="card-header bg-warning text-dark">
+                        <h5 class="card-title mb-0">✉️ Generatore Email B2B (IA)</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-2 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Azienda Destinataria</label>
+                                <input type="text" id="targetCompany" class="form-control" placeholder="es. Lavanderia Lampo">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Settore Destinatario</label>
+                                <input type="text" id="targetIndustry" class="form-control" placeholder="es. Lavanderia Industriale">
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label">La tua Offerta/Prodotto</label>
+                                <input type="text" id="myProduct" class="form-control" placeholder="es. Detersivi ecologici con 20% di sconto sul primo ordine">
+                            </div>
+                        </div>
+
+                        <button type="button" class="btn btn-primary w-100 mb-3" id="btnGenera" onclick="generaBozzaEmail()">
+                            🤖 Genera Bozza con IA
+                        </button>
+
+                        <div id="emailPreviewArea" style="display: none;" class="p-3 bg-white border rounded">
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Email Destinatario (per invio):</strong></label>
+                                <input type="email" id="targetEmail" class="form-control" placeholder="inserisci email destinatario">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Oggetto Email:</strong></label>
+                                <input type="text" id="emailSubject" class="form-control">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Testo Email (Modificabile):</strong></label>
+                                <textarea id="emailBody" class="form-control" rows="7"></textarea>
+                            </div>
+
+                            <div class="d-flex gap-2">
+                                <button type="button" class="btn btn-outline-secondary w-50" onclick="generaBozzaEmail()">🔄 Rigenera</button>
+                                <button type="button" class="btn btn-success w-50" id="btnInvia" onclick="inviaEmail()">🚀 Invia Email</button>
+                            </div>
+                            <div id="statusMessage" class="mt-2 text-center"></div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>
+
+    <script>
+    async function generaBozzaEmail() {
+        const company = document.getElementById('targetCompany').value;
+        const industry = document.getElementById('targetIndustry').value;
+        const product = document.getElementById('myProduct').value;
+        const btnGenera = document.getElementById('btnGenera');
+
+        if(!company || !industry || !product) {
+            alert('Per favore, compila tutti e tre i campi del destinatario e offerta!');
+            return;
+        }
+
+        btnGenera.disabled = true;
+        btnGenera.innerText = '⏳ Generazione bozza in corso...';
+
+        try {
+            const res = await fetch('/api/generate-email-draft', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    target_company: company,
+                    target_industry: industry,
+                    offerta_azienda: product
+                })
+            });
+
+            const data = await res.json();
+            if(data.success) {
+                document.getElementById('emailSubject').value = data.subject;
+                document.getElementById('emailBody').value = data.body;
+                document.getElementById('emailPreviewArea').style.display = 'block';
+            } else {
+                alert('Errore: ' + (data.error || 'Impossibile generare la bozza'));
+            }
+        } catch(e) {
+            alert('Errore di connessione con la Dashboard.');
+        } finally {
+            btnGenera.disabled = false;
+            btnGenera.innerText = '🤖 Genera Bozza con IA';
+        }
+    }
+
+    async function inviaEmail() {
+        const toEmail = document.getElementById('targetEmail').value;
+        const subject = document.getElementById('emailSubject').value;
+        const body = document.getElementById('emailBody').value;
+        const btnInvia = document.getElementById('btnInvia');
+        const statusMsg = document.getElementById('statusMessage');
+
+        if(!toEmail) {
+            alert('Inserisci l\'indirizzo email a cui inviare!');
+            return;
+        }
+
+        btnInvia.disabled = true;
+        statusMsg.innerHTML = '<span class="text-info">Invio in corso...</span>';
+
+        try {
+            const res = await fetch('/send-mail/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    to_email: toEmail,
+                    subject: subject,
+                    body: body
+                })
+            });
+
+            const data = await res.json();
+            if(res.ok) {
+                statusMsg.innerHTML = '<span class="text-success">✅ Email presa in carico e inviata con successo!</span>';
+            } else {
+                statusMsg.innerHTML = '<span class="text-danger">❌ Errore durante l\'invio.</span>';
+            }
+        } catch(e) {
+            statusMsg.innerHTML = '<span class="text-danger">❌ Errore di connessione.</span>';
+        } finally {
+            btnInvia.disabled = false;
+        }
+    }
+    </script>
 </body>
 </html>
 """
