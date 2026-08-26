@@ -1,83 +1,151 @@
 import os
 import json
+from datetime import datetime
 from google import genai
+from google.genai import types
+from sqlalchemy.orm import Session
 
-def get_gemini_client():
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        return None
-    return genai.Client(api_key=api_key)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-def risposta_ia_whatsapp(messaggio_utente: str, istruzioni_azienda: str, slot_disponibili: list = None) -> str:
-    """Gestisce le risposte automatiche dell'IA per i messaggi WhatsApp del cliente."""
-    client = get_gemini_client()
+# --- FUNZIONI STRUMENTI (TOOLS) ---
+def cerca_slot_disponibile(azienda_id: int, data_ora: str, db: Session, SlotAgenda) -> str:
+    slot = db.query(SlotAgenda).filter(
+        SlotAgenda.azienda_id == azienda_id,
+        SlotAgenda.data_ora == data_ora
+    ).first()
+    
+    if not slot or slot.stato == "Disponibile":
+        return f"Lo slot per il {data_ora} è DISPONIBILE."
+    return f"Lo slot per il {data_ora} è già OCCUPATO."
+
+def fissa_appuntamento(azienda_id: int, data_ora: str, servizio: str, nome_cliente: str, numero_cliente: str, db: Session, SlotAgenda) -> str:
+    slot = db.query(SlotAgenda).filter(
+        SlotAgenda.azienda_id == azienda_id,
+        SlotAgenda.data_ora == data_ora
+    ).first()
+    
+    if not slot:
+        slot = SlotAgenda(
+            azienda_id=azienda_id, 
+            data_ora=data_ora, 
+            stato="Occupato", 
+            cliente_nome=nome_cliente, 
+            numero_cliente=numero_cliente,
+            servizio=servizio
+        )
+        db.add(slot)
+    else:
+        slot.stato = "Occupato"
+        slot.cliente_nome = nome_cliente
+        slot.numero_cliente = numero_cliente
+        slot.servizio = servizio
+        
+    db.commit()
+    return f"Appuntamento confermato con successo per {nome_cliente} in data {data_ora} per il servizio {servizio}."
+
+# --- MOTORE DI RISPOSTA IA WHATSAPP ---
+def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session: Session, SlotAgenda, Messaggio) -> str:
     if not client:
-        return "Servizio IA temporaneamente non disponibile (API Key non configurata)."
+        return "Servizio IA non disponibile."
 
-    prompt = f"""
-    Sei l'assistente virtuale dell'azienda. Rispondi al cliente in modo cortese, chiaro e conciso.
-    
-    ISTRUZIONI AZIENDALI:
-    {istruzioni_azienda}
-    
-    SLOT AGENDA DISPONIBILI:
-    {slot_disponibili if slot_disponibili else 'Nessuno slot specificato.'}
-    
-    MESSAGGIO RICEVUTO DAL CLIENTE:
-    "{messaggio_utente}"
-    
-    Rispondi direttamente al cliente in italiano in stile conversazionale da chat WhatsApp.
-    """
+    storico = db_session.query(Messaggio).filter(
+        Messaggio.contatto_id == contatto.id
+    ).order_by(Messaggio.inviato_il.desc()).limit(6).all()
+    storico.reverse()
+
+    conversazione = ""
+    for msg in storico:
+        ruolo = "Cliente" if msg.direzione == "INBOUND" else "Assistente"
+        conversazione += f"{ruolo}: {msg.testo}\n"
+
+    ora_attuale = datetime.now()
+
+    prompt = (
+        f"Data e Ora attuale: {ora_attuale.strftime('%d/%m/%Y alle %H:%M')}.\n"
+        f"Sei l'assistente virtuale di {azienda.nome}.\n"
+        f"ISTRUZIONI AZIENDALI:\n{azienda.istruzioni_ia}\n\n"
+        f"CRONOLOGIA CHAT:\n{conversazione}"
+        f"Cliente: {messaggio_attuale}\n"
+        "Assistente:"
+    )
+
+    def verifica_disponibilita(data_ora: str) -> str:
+        """Verifica se uno slot è disponibile."""
+        return cerca_slot_disponibile(azienda.id, data_ora, db_session, SlotAgenda)
+
+    def prenota_appuntamento(data_ora: str, servizio: str, nome_cliente: str) -> str:
+        """Prenota un appuntamento salvando data_ora, servizio e nome cliente."""
+        return fissa_appuntamento(azienda.id, data_ora, servizio, nome_cliente, contatto.numero_whatsapp, db_session, SlotAgenda)
+
+    tools_list = [verifica_disponibilita, prenota_appuntamento]
+
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(tools=tools_list, temperature=0.3)
+        )
+        return response.text.strip()
+    except Exception:
+        try:
+            response = client.models.generate_content(
+                model="gemini-1.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(tools=tools_list, temperature=0.3)
+            )
+            return response.text.strip()
+        except Exception:
+            return "Grazie per il messaggio! Un operatore ti risponderà a breve."
+
+def risposta_ia_whatsapp(messaggio_utente: str, istruzioni_azienda: str, slot_disponibili: list = None) -> str:
+    """Wrapper per chiamate semplici senza DB/contatto."""
+    if not client:
+        return "Servizio IA non disponibile."
+    
+    prompt = f"ISTRUZIONI AZIENDALI:\n{istruzioni_azienda}\n\nMESSAGGIO CLIENTE:\n{messaggio_utente}"
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
             contents=prompt
         )
         return response.text.strip()
-    except Exception as e:
-        print(f"Errore IA WhatsApp: {e}")
-        return "Grazie per averci contattato! Un nostro operatore ti risponderà il prima possibile."
+    except Exception:
+        return "Grazie per averci contattato! Ti risponderemo a breve."
 
+# --- GENERAZIONE EMAIL B2B ---
 def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
-    """Genera la bozza email marketing B2B ed estrae il dominio ipotizzato."""
-    client = get_gemini_client()
     if not client:
-        return {
-            "success": False, 
-            "error": "GEMINI_API_KEY non presente nelle variabili d'ambiente.",
-            "subject": f"Proposta per {target_info}",
-            "body": f"Gentile team di {target_info},\n\nVorremmo proporvi la nostra offerta: {offerta_azienda}.\n\nRestiamo a disposizione.",
-            "domain": ""
-        }
+        return {"success": False, "error": "Servizio IA non disponibile."}
 
     prompt = f"""
-    Sei un esperto di email marketing B2B.
-    
-    Obiettivi:
-    1. Genera una bozza di email persuasiva, professionale e breve per il seguente target: "{target_info}".
-       L'offerta da proporre è: "{offerta_azienda}".
-    2. Identifica o ipotizza il dominio web aziendale principale più probabile per "{target_info}" (es. se target è "Conad", il dominio è "conad.it"; se è "Bar Sport", ipotizza "barsport.it").
+    Sei un copywriter B2B esperto in cold outreach. 
+    Scrivi una mail di vendita professionale, breve (massimo 120 parole) e ad alto tasso di conversione per il seguente target: "{target_info}".
 
-    Rispondi ESCLUSIVAMENTE con un oggetto JSON valido (senza formattazione markdown tipo ```json):
+    La nostra offerta/prodotto:
+    - {offerta_azienda}
+
+    Identifica anche il dominio web aziendale principale più probabile per "{target_info}" (es. se target è "Conad", il dominio è "conad.it").
+
+    IMPORTANTE: Rispondi ESCLUSIVAMENTE con un oggetto JSON valido con questa struttura esatta:
     {{
-        "subject": "Oggetto dell'email qui",
-        "body": "Testo dell'email qui",
+        "subject": "Oggetto incisivo senza sembrare spam",
+        "body": "Testo dell'email formattato con a capo e una Call To Action finale",
         "suggested_domain": "dominioipotizzato.it"
     }}
     """
+
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.7
+            )
         )
-        content = response.text.strip()
         
-        if content.startswith("```json"):
-            content = content.replace("```json", "").replace("```", "").strip()
-        elif content.startswith("```"):
-            content = content.replace("```", "").strip()
-            
-        data = json.loads(content)
+        data = json.loads(response.text.strip())
         return {
             "success": True,
             "subject": data.get("subject", ""),
@@ -85,11 +153,4 @@ def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
             "domain": data.get("suggested_domain", "").lower()
         }
     except Exception as e:
-        print(f"Errore generazione IA Email: {e}")
-        return {
-            "success": False, 
-            "error": str(e),
-            "subject": f"Proposta per {target_info}",
-            "body": f"Gentile team di {target_info},\n\nVorremmo proporvi la nostra offerta: {offerta_azienda}.\n\nRestiamo a disposizione.",
-            "domain": ""
-        }
+        return {"success": False, "error": str(e)}
