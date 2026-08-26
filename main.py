@@ -9,6 +9,7 @@ from twilio.rest import Client as TwilioClient
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, Session
 from apscheduler.schedulers.background import BackgroundScheduler
+import requests
 
 from ai_service import genera_risposta_gemini, genera_bozza_email_b2b
 from dashboard import get_dashboard_routes
@@ -18,6 +19,7 @@ from instagram import get_instagram_routes
 DATABASE_URL = os.getenv("DATABASE_URL")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+HUNTER_API_KEY = os.getnv("HUNTER_API_KEY")
 
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -211,3 +213,27 @@ async def generate_email_draft(data: DraftEmailRequest):
         offerta_azienda=data.offerta_azienda
     )
     return result
+
+def cerca_email_da_dominio(domain: str) -> list[str]:
+    if not HUNTER_API_KEY:
+        print("HUNTER_API_KEY non configurata.")
+        return []
+    
+    url = f"https://api.hunter.io/v2/domain-search?domain={domain}&api_key={HUNTER_API_KEY}"
+    try:
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        emails = [item["value"] for item in data.get("data", {}).get("emails", [])]
+        return emails
+    except Exception as e:
+        print(f"Errore ricerca Hunter.io: {e}")
+        return []
+
+@app.post("/api/find-domain-emails")
+async def find_domain_emails(payload: dict):
+    domain = payload.get("domain", "").strip()
+    if not domain:
+        raise HTTPException(status_code=400, detail="Dominio non valido.")
+    
+    emails = cerca_email_da_dominio(domain)
+    return {"success": True, "domain": domain, "emails": emails, "count": len(emails)}
