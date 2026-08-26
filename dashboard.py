@@ -129,99 +129,95 @@ HTML_TEMPLATE = """
             </div>
         </div>
     </div>
+
     <script>
     async function generaBozzaEmail() {
-    console.log("Pulsante premuto!");
-    
-    const targetEl = document.getElementById('targetInfo');
-    const productEl = document.getElementById('myProduct');
-    const btnGenera = document.getElementById('btnGenera');
+        const targetEl = document.getElementById("targetInfo");
+        const productEl = document.getElementById("myProduct");
+        const btnGenera = document.getElementById("btnGenera");
 
-    if (!targetEl || !productEl) {
-        alert("Errore: Impossibile trovare i campi di testo nell'HTML.");
-        return;
-    }
-
-    const target = targetEl.value.trim();
-    const product = productEl.value.trim();
-
-    if(!target || !product) {
-        alert('Per favore, compila sia il destinatario che la tua offerta!');
-        return;
-    }
-
-    btnGenera.disabled = true;
-    btnGenera.innerText = '⏳ Generazione bozza in corso...';
-
-    try {
-        const res = await fetch('/api/generate-email-draft', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                target_info: target,
-                offerta_azienda: product
-            })
-        });
-
-        const data = await res.json();
-        console.log("Risposta backend:", data);
-
-        if(data.success) {
-            document.getElementById('emailSubject').value = data.subject;
-            document.getElementById('emailBody').value = data.body;
-            document.getElementById('emailPreviewArea').style.display = 'block';
-        } else {
-            alert('Errore IA: ' + (data.error || 'Impossibile generare la bozza'));
+        if (!targetEl || !productEl) {
+            alert("Errore: Impossibile trovare i campi di testo.");
+            return;
         }
-    } catch(e) {
-        console.error("Errore fetch:", e);
-        alert('Errore di connessione con la Dashboard: ' + e.message);
-    } finally {
-        btnGenera.disabled = false;
-        btnGenera.innerText = '🤖 Genera Bozza con IA';
-    }
-}
 
-async function inviaEmail() {
-    const toEmail = document.getElementById('targetEmail').value.trim();
-    const subject = document.getElementById('emailSubject').value;
-    const body = document.getElementById('emailBody').value;
-    const btnInvia = document.getElementById('btnInvia');
-    const statusMsg = document.getElementById('statusMessage');
+        const target = targetEl.value.trim();
+        const product = productEl.value.trim();
 
-    if(!toEmail) {
-        alert('Inserisci l\'indirizzo email a cui inviare!');
-        return;
-    }
-
-    btnInvia.disabled = true;
-    statusMsg.innerHTML = '<span class="text-info">Invio in corso...</span>';
-
-    try {
-        const res = await fetch('/send-mail/', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                to_email: toEmail,
-                subject: subject,
-                body: body
-            })
-        });
-
-        const data = await res.json();
-        if(res.ok) {
-            statusMsg.innerHTML = '<span class="text-success">✅ Email presa in carico e inviata con successo!</span>';
-        } else {
-            statusMsg.innerHTML = '<span class="text-danger">❌ Errore durante l\'invio.</span>';
+        if(!target || !product) {
+            alert("Per favore, compila sia il destinatario che la tua offerta!");
+            return;
         }
-    } catch(e) {
-        statusMsg.innerHTML = '<span class="text-danger">❌ Errore di connessione.</span>';
-    } finally {
-        btnInvia.disabled = false;
+
+        btnGenera.disabled = true;
+        btnGenera.innerText = "⏳ Generazione bozza in corso...";
+
+        try {
+            const res = await fetch("/api/generate-email-draft", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    target_info: target,
+                    offerta_azienda: product
+                })
+            });
+
+            const data = await res.json();
+
+            if(data.success) {
+                document.getElementById("emailSubject").value = data.subject;
+                document.getElementById("emailBody").value = data.body;
+                document.getElementById("emailPreviewArea").style.display = "block";
+            } else {
+                alert("Errore IA: " + (data.error || "Impossibile generare la bozza"));
+            }
+        } catch(e) {
+            alert("Errore di connessione con il server.");
+        } finally {
+            btnGenera.disabled = false;
+            btnGenera.innerText = "🤖 Genera Bozza con IA";
+        }
     }
-}
-</script>
-    
+
+    async function inviaEmail() {
+        const toEmail = document.getElementById("targetEmail").value.trim();
+        const subject = document.getElementById("emailSubject").value;
+        const body = document.getElementById("emailBody").value;
+        const btnInvia = document.getElementById("btnInvia");
+        const statusMsg = document.getElementById("statusMessage");
+
+        if(!toEmail) {
+            alert("Inserisci un indirizzo email valido!");
+            return;
+        }
+
+        btnInvia.disabled = true;
+        statusMsg.innerHTML = '<span class="text-info">Invio in corso...</span>';
+
+        try {
+            const res = await fetch("/send-mail/", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    to_email: toEmail,
+                    subject: subject,
+                    body: body
+                })
+            });
+
+            const data = await res.json();
+            if(res.ok) {
+                statusMsg.innerHTML = '<span class="text-success">✅ Email presa in carico e inviata con successo!</span>';
+            } else {
+                statusMsg.innerHTML = '<span class="text-danger">❌ Errore durante invio.</span>';
+            }
+        } catch(e) {
+            statusMsg.innerHTML = '<span class="text-danger">❌ Errore di connessione.</span>';
+        } finally {
+            btnInvia.disabled = false;
+        }
+    }
+    </script>
 </body>
 </html>
 """
