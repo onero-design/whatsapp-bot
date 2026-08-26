@@ -111,6 +111,10 @@ HTML_TEMPLATE = """
                                     <button class="btn btn-outline-primary" type="button" onclick="cercaEmailDominio()">🔍 Cerca Email Dominio</button>
                                 </div>
                                 <div id="foundEmailsCount" class="form-text mt-2"></div>
+                                <div id="emailsListContainer" class="mt-2 p-2 bg-light border rounded" style="display: none; max-height: 150px; overflow-y: auto;">
+                                    <small class="text-muted fw-bold mb-1 d-block">Indirizzi email trovati:</small>
+                                    <ul id="emailsList" class="mb-0 ps-3 small text-secondary"></ul>
+                                </div>
                             </div>
 
                             <div class="mb-3">
@@ -155,7 +159,7 @@ HTML_TEMPLATE = """
         }
 
         btnGenera.disabled = true;
-        btnGenera.innerText = "⏳ Generazione bozza in corso...";
+        btnGenera.innerText = "⏳ Generazione bozza e ricerca dominio in corso...";
 
         try {
             const res = await fetch("/api/generate-email-draft", {
@@ -172,6 +176,11 @@ HTML_TEMPLATE = """
             if(data.success) {
                 document.getElementById("emailSubject").value = data.subject;
                 document.getElementById("emailBody").value = data.body;
+                
+                if (data.domain) {
+                    document.getElementById("targetDomain").value = data.domain;
+                }
+
                 document.getElementById("emailPreviewArea").style.display = "block";
             } else {
                 alert("Errore IA: " + (data.error || "Impossibile generare la bozza"));
@@ -187,6 +196,8 @@ HTML_TEMPLATE = """
     async function cercaEmailDominio() {
         const domain = document.getElementById("targetDomain").value.trim();
         const countDiv = document.getElementById("foundEmailsCount");
+        const listContainer = document.getElementById("emailsListContainer");
+        const listUl = document.getElementById("emailsList");
 
         if(!domain) {
             alert("Inserisci un dominio valido!");
@@ -194,6 +205,8 @@ HTML_TEMPLATE = """
         }
 
         countDiv.innerHTML = '<span class="text-info">🔍 Ricerca indirizzi email in corso...</span>';
+        listContainer.style.display = "none";
+        listUl.innerHTML = "";
 
         try {
             const res = await fetch("/api/find-domain-emails", {
@@ -204,12 +217,27 @@ HTML_TEMPLATE = """
 
             const data = await res.json();
             if(data.success && data.count > 0) {
-                countDiv.innerHTML = `<span class="text-success">✅ Trovate <strong>${data.count}</strong> email pubbliche per ${domain}!</span>`;
+                countDiv.innerHTML = `<span class="text-success" style="cursor: pointer;" onclick="toggleEmailList()">✅ Trovate <strong>${data.count}</strong> email pubbliche per ${domain}! <span class="text-decoration-underline">(clicca per mostrare/nascondere)</span></span>`;
+                
+                data.emails.forEach(email => {
+                    const li = document.createElement("li");
+                    li.textContent = email;
+                    listUl.appendChild(li);
+                });
             } else {
                 countDiv.innerHTML = `<span class="text-warning">⚠️ Nessuna email trovata direttamente per il dominio ${domain}.</span>`;
             }
         } catch(e) {
             countDiv.innerHTML = '<span class="text-danger">Errore durante la ricerca delle email.</span>';
+        }
+    }
+
+    function toggleEmailList() {
+        const listContainer = document.getElementById("emailsListContainer");
+        if (listContainer.style.display === "none") {
+            listContainer.style.display = "block";
+        } else {
+            listContainer.style.display = "none";
         }
     }
 
