@@ -84,18 +84,19 @@ HTML_TEMPLATE = """
 
                 <!-- EMAIL MARKETING B2B AUTOMATICO SU DOMINIO -->
                 <div class="card shadow-sm">
-                    <div class="card-header bg-warning text-dark">
+                    <div class="card-header bg-warning text-dark d-flex justify-content-between align-items-center">
                         <h5 class="card-title mb-0">🤖 Bot Email Marketing su Dominio</h5>
+                        <button class="btn btn-sm btn-outline-dark" onclick="resetForm()">🗑️ Pulisci Campi</button>
                     </div>
                     <div class="card-body">
                         <div class="row g-2 mb-3">
                             <div class="col-md-6">
                                 <label class="form-label">Chi vuoi contattare? (Azienda o Settore)</label>
-                                <input type="text" id="targetInfo" class="form-control" placeholder="es. Conad o Lavanderia Lampo">
+                                <input type="text" id="targetInfo" class="form-control" placeholder="es. Conad o Lavanderia Lampo" oninput="saveState()">
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">La tua Offerta / Prodotto</label>
-                                <input type="text" id="myProduct" class="form-control" placeholder="es. Detersivi ecologici sconto 20%">
+                                <input type="text" id="myProduct" class="form-control" placeholder="es. Detersivi ecologici sconto 20%" oninput="saveState()">
                             </div>
                         </div>
 
@@ -107,7 +108,7 @@ HTML_TEMPLATE = """
                             <div class="mb-3">
                                 <label class="form-label"><strong>Dominio Web Aziendale Target:</strong></label>
                                 <div class="input-group">
-                                    <input type="text" id="targetDomain" class="form-control" placeholder="es. lavanderialampo.it">
+                                    <input type="text" id="targetDomain" class="form-control" placeholder="es. lavanderialampo.it" oninput="saveState()">
                                     <button class="btn btn-outline-primary" type="button" onclick="cercaEmailDominio()">🔍 Cerca Email Dominio</button>
                                 </div>
                                 <div id="foundEmailsCount" class="form-text mt-2"></div>
@@ -119,11 +120,11 @@ HTML_TEMPLATE = """
 
                             <div class="mb-3">
                                 <label class="form-label"><strong>Oggetto Email:</strong></label>
-                                <input type="text" id="emailSubject" class="form-control">
+                                <input type="text" id="emailSubject" class="form-control" oninput="saveState()">
                             </div>
                             <div class="mb-3">
                                 <label class="form-label"><strong>Testo Email (Modificabile):</strong></label>
-                                <textarea id="emailBody" class="form-control" rows="7"></textarea>
+                                <textarea id="emailBody" class="form-control" rows="7" oninput="saveState()"></textarea>
                             </div>
 
                             <div class="d-flex gap-2">
@@ -140,15 +141,51 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+    // Salvataggio e ripristino automatico dati form su ricarica pagina
+    function saveState() {
+        const state = {
+            targetInfo: document.getElementById("targetInfo").value,
+            myProduct: document.getElementById("myProduct").value,
+            targetDomain: document.getElementById("targetDomain").value,
+            emailSubject: document.getElementById("emailSubject").value,
+            emailBody: document.getElementById("emailBody").value,
+            previewVisible: document.getElementById("emailPreviewArea").style.display !== "none"
+        };
+        localStorage.setItem("dashboard_email_state", JSON.stringify(state));
+    }
+
+    function loadState() {
+        const saved = localStorage.getItem("dashboard_email_state");
+        if (saved) {
+            try {
+                const state = JSON.parse(saved);
+                if (state.targetInfo) document.getElementById("targetInfo").value = state.targetInfo;
+                if (state.myProduct) document.getElementById("myProduct").value = state.myProduct;
+                if (state.targetDomain) document.getElementById("targetDomain").value = state.targetDomain;
+                if (state.emailSubject) document.getElementById("emailSubject").value = state.emailSubject;
+                if (state.emailBody) document.getElementById("emailBody").value = state.emailBody;
+                if (state.previewVisible) document.getElementById("emailPreviewArea").style.display = "block";
+            } catch(e) {}
+        }
+    }
+
+    function resetForm() {
+        localStorage.removeItem("dashboard_email_state");
+        document.getElementById("targetInfo").value = "";
+        document.getElementById("myProduct").value = "";
+        document.getElementById("targetDomain").value = "";
+        document.getElementById("emailSubject").value = "";
+        document.getElementById("emailBody").value = "";
+        document.getElementById("emailPreviewArea").style.display = "none";
+        document.getElementById("statusMessage").innerHTML = "";
+    }
+
+    document.addEventListener("DOMContentLoaded", loadState);
+
     async function generaBozzaEmail() {
         const targetEl = document.getElementById("targetInfo");
         const productEl = document.getElementById("myProduct");
         const btnGenera = document.getElementById("btnGenera");
-
-        if (!targetEl || !productEl) {
-            alert("Errore: Impossibile trovare i campi di testo.");
-            return;
-        }
 
         const target = targetEl.value.trim();
         const product = productEl.value.trim();
@@ -176,12 +213,11 @@ HTML_TEMPLATE = """
             if(data.success) {
                 document.getElementById("emailSubject").value = data.subject;
                 document.getElementById("emailBody").value = data.body;
-                
                 if (data.domain) {
                     document.getElementById("targetDomain").value = data.domain;
                 }
-
                 document.getElementById("emailPreviewArea").style.display = "block";
+                saveState();
             } else {
                 alert("Errore IA: " + (data.error || "Impossibile generare la bozza"));
             }
@@ -234,11 +270,7 @@ HTML_TEMPLATE = """
 
     function toggleEmailList() {
         const listContainer = document.getElementById("emailsListContainer");
-        if (listContainer.style.display === "none") {
-            listContainer.style.display = "block";
-        } else {
-            listContainer.style.display = "none";
-        }
+        listContainer.style.display = (listContainer.style.display === "none") ? "block" : "none";
     }
 
     async function avviaCampagnaAutomatica() {
