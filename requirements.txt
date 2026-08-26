@@ -1,12 +1,12 @@
-﻿fastapi
+fastapi
 uvicorn
 sqlalchemy
 psycopg2-binary
 twilio
-google-genai
 jinja2
 python-multipart
 apscheduler
 email-validator
 requests
 openai>=1.0.0
+pydantic
