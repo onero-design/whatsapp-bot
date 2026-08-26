@@ -1,16 +1,16 @@
 import os
 import json
-from openai import OpenAI
+from google import genai
 
-def get_openai_client():
-    api_key = os.getenv("OPENAI_API_KEY")
+def get_gemini_client():
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return None
-    return OpenAI(api_key=api_key)
+    return genai.Client(api_key=api_key)
 
 def risposta_ia_whatsapp(messaggio_utente: str, istruzioni_azienda: str, slot_disponibili: list = None) -> str:
     """Gestisce le risposte automatiche dell'IA per i messaggi WhatsApp del cliente."""
-    client = get_openai_client()
+    client = get_gemini_client()
     if not client:
         return "Servizio IA temporaneamente non disponibile (API Key non configurata)."
 
@@ -29,23 +29,22 @@ def risposta_ia_whatsapp(messaggio_utente: str, istruzioni_azienda: str, slot_di
     Rispondi direttamente al cliente in italiano in stile conversazionale da chat WhatsApp.
     """
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
         )
-        return response.choices[0].message.content.strip()
+        return response.text.strip()
     except Exception as e:
         print(f"Errore IA WhatsApp: {e}")
         return "Grazie per averci contattato! Un nostro operatore ti risponderà il prima possibile."
 
 def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
     """Genera la bozza email marketing B2B ed estrae il dominio ipotizzato."""
-    client = get_openai_client()
+    client = get_gemini_client()
     if not client:
         return {
             "success": False, 
-            "error": "OPENAI_API_KEY non presente nelle variabili d'ambiente.",
+            "error": "GEMINI_API_KEY non presente nelle variabili d'ambiente.",
             "subject": f"Proposta per {target_info}",
             "body": f"Gentile team di {target_info},\n\nVorremmo proporvi la nostra offerta: {offerta_azienda}.\n\nRestiamo a disposizione.",
             "domain": ""
@@ -67,12 +66,11 @@ def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
     }}
     """
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
         )
-        content = response.choices[0].message.content.strip()
+        content = response.text.strip()
         
         if content.startswith("```json"):
             content = content.replace("```json", "").replace("```", "").strip()
