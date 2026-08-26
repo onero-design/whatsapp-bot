@@ -90,16 +90,12 @@ HTML_TEMPLATE = """
                     <div class="card-body">
                         <div class="row g-2 mb-3">
                             <div class="col-md-6">
-                                <label class="form-label">Azienda Destinataria</label>
-                                <input type="text" id="targetCompany" class="form-control" placeholder="es. Lavanderia Lampo">
+                                <label class="form-label">Chi vuoi contattare? (Azienda o Settore)</label>
+                                <input type="text" id="targetInfo" class="form-control" placeholder="es. Conad oppure Lavanderie industriali">
                             </div>
                             <div class="col-md-6">
-                                <label class="form-label">Settore Destinatario</label>
-                                <input type="text" id="targetIndustry" class="form-control" placeholder="es. Lavanderia Industriale">
-                            </div>
-                            <div class="col-12">
-                                <label class="form-label">La tua Offerta/Prodotto</label>
-                                <input type="text" id="myProduct" class="form-control" placeholder="es. Detersivi ecologici con 20% di sconto sul primo ordine">
+                                <label class="form-label">La tua Offerta / Prodotto</label>
+                                <input type="text" id="myProduct" class="form-control" placeholder="es. Detersivi ecologici sconto 20%">
                             </div>
                         </div>
 
@@ -136,13 +132,12 @@ HTML_TEMPLATE = """
 
     <script>
     async function generaBozzaEmail() {
-        const company = document.getElementById('targetCompany').value;
-        const industry = document.getElementById('targetIndustry').value;
+        const target = document.getElementById('targetInfo').value;
         const product = document.getElementById('myProduct').value;
         const btnGenera = document.getElementById('btnGenera');
 
-        if(!company || !industry || !product) {
-            alert('Per favore, compila tutti e tre i campi del destinatario e offerta!');
+        if(!target || !product) {
+            alert('Per favore, compila sia il destinatario che la tua offerta!');
             return;
         }
 
@@ -154,8 +149,7 @@ HTML_TEMPLATE = """
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    target_company: company,
-                    target_industry: industry,
+                    target_info: target,
                     offerta_azienda: product
                 })
             });
