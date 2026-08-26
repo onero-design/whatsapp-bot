@@ -84,19 +84,18 @@ HTML_TEMPLATE = """
 
                 <!-- EMAIL MARKETING B2B CON IA -->
                 <div class="card shadow-sm">
-                    <div class="card-header bg-warning text-dark d-flex justify-content-between align-items-center">
+                    <div class="card-header bg-warning text-dark">
                         <h5 class="card-title mb-0">✉️ Generatore Email B2B (IA)</h5>
-                        <button class="btn btn-sm btn-outline-dark" onclick="resetForm()">🗑️ Pulisci</button>
                     </div>
                     <div class="card-body">
                         <div class="row g-2 mb-3">
                             <div class="col-md-6">
                                 <label class="form-label">Chi vuoi contattare? (Azienda o Settore)</label>
-                                <input type="text" id="targetInfo" class="form-control" placeholder="es. Conad oppure Lavanderie industriali" oninput="saveState()">
+                                <input type="text" id="targetInfo" class="form-control" placeholder="es. Conad oppure Lavanderie industriali">
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">La tua Offerta / Prodotto</label>
-                                <input type="text" id="myProduct" class="form-control" placeholder="es. Detersivi ecologici sconto 20%" oninput="saveState()">
+                                <input type="text" id="myProduct" class="form-control" placeholder="es. Detersivi ecologici sconto 20%">
                             </div>
                         </div>
 
@@ -107,15 +106,15 @@ HTML_TEMPLATE = """
                         <div id="emailPreviewArea" style="display: none;" class="p-3 bg-white border rounded">
                             <div class="mb-3">
                                 <label class="form-label"><strong>Email Destinatario (per invio):</strong></label>
-                                <input type="email" id="targetEmail" class="form-control" placeholder="inserisci email destinatario" oninput="saveState()">
+                                <input type="email" id="targetEmail" class="form-control" placeholder="inserisci email destinatario">
                             </div>
                             <div class="mb-3">
                                 <label class="form-label"><strong>Oggetto Email:</strong></label>
-                                <input type="text" id="emailSubject" class="form-control" oninput="saveState()">
+                                <input type="text" id="emailSubject" class="form-control">
                             </div>
                             <div class="mb-3">
                                 <label class="form-label"><strong>Testo Email (Modificabile):</strong></label>
-                                <textarea id="emailBody" class="form-control" rows="7" oninput="saveState()"></textarea>
+                                <textarea id="emailBody" class="form-control" rows="7"></textarea>
                             </div>
 
                             <div class="d-flex gap-2">
@@ -132,46 +131,6 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-    function saveState() {
-        const state = {
-            targetInfo: document.getElementById("targetInfo").value,
-            myProduct: document.getElementById("myProduct").value,
-            targetEmail: document.getElementById("targetEmail").value,
-            emailSubject: document.getElementById("emailSubject").value,
-            emailBody: document.getElementById("emailBody").value,
-            previewVisible: document.getElementById("emailPreviewArea").style.display !== "none"
-        };
-        localStorage.setItem("dashboard_state", JSON.stringify(state));
-    }
-
-    function loadState() {
-        const saved = localStorage.getItem("dashboard_state");
-        if (saved) {
-            try {
-                const state = JSON.parse(saved);
-                if (state.targetInfo) document.getElementById("targetInfo").value = state.targetInfo;
-                if (state.myProduct) document.getElementById("myProduct").value = state.myProduct;
-                if (state.targetEmail) document.getElementById("targetEmail").value = state.targetEmail;
-                if (state.emailSubject) document.getElementById("emailSubject").value = state.emailSubject;
-                if (state.emailBody) document.getElementById("emailBody").value = state.emailBody;
-                if (state.previewVisible) document.getElementById("emailPreviewArea").style.display = "block";
-            } catch(e) {}
-        }
-    }
-
-    function resetForm() {
-        localStorage.removeItem("dashboard_state");
-        document.getElementById("targetInfo").value = "";
-        document.getElementById("myProduct").value = "";
-        document.getElementById("targetEmail").value = "";
-        document.getElementById("emailSubject").value = "";
-        document.getElementById("emailBody").value = "";
-        document.getElementById("emailPreviewArea").style.display = "none";
-        document.getElementById("statusMessage").innerHTML = "";
-    }
-
-    document.addEventListener("DOMContentLoaded", loadState);
-
     async function generaBozzaEmail() {
         const targetEl = document.getElementById("targetInfo");
         const productEl = document.getElementById("myProduct");
@@ -209,7 +168,6 @@ HTML_TEMPLATE = """
                 document.getElementById("emailSubject").value = data.subject;
                 document.getElementById("emailBody").value = data.body;
                 document.getElementById("emailPreviewArea").style.display = "block";
-                saveState();
             } else {
                 alert("Errore IA: " + (data.error || "Impossibile generare la bozza"));
             }
