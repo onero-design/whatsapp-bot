@@ -2,6 +2,7 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import socket
 
 def send_email(to_email: str, subject: str, body: str) -> bool:
     smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
@@ -20,7 +21,7 @@ def send_email(to_email: str, subject: str, body: str) -> bool:
     message.attach(MIMEText(body, "html")) # Supporta anche formattazione HTML
 
     try:
-        server = smtplib.SMTP(smtp_server, smtp_port)
+        server = smtplib.SMTP(socket.gethostbyname(smtp_server), smtp_port)
         server.starttls()
         server.login(sender_email, sender_password)
         server.send_message(message)
