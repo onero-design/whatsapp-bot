@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Form, Depends
+from fastapi import APIRouter, Form, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from jinja2 import Template
@@ -82,17 +82,17 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
 
-                <!-- EMAIL MARKETING B2B AUTOMATICO SU DOMINIO -->
+                <!-- EMAIL MARKETING B2B CON IA -->
                 <div class="card shadow-sm">
                     <div class="card-header bg-warning text-dark d-flex justify-content-between align-items-center">
-                        <h5 class="card-title mb-0">🤖 Bot Email Marketing su Dominio</h5>
-                        <button class="btn btn-sm btn-outline-dark" onclick="resetForm()">🗑️ Pulisci Campi</button>
+                        <h5 class="card-title mb-0">✉️ Generatore Email B2B (IA)</h5>
+                        <button class="btn btn-sm btn-outline-dark" onclick="resetForm()">🗑️ Pulisci</button>
                     </div>
                     <div class="card-body">
                         <div class="row g-2 mb-3">
                             <div class="col-md-6">
                                 <label class="form-label">Chi vuoi contattare? (Azienda o Settore)</label>
-                                <input type="text" id="targetInfo" class="form-control" placeholder="es. Conad o Lavanderia Lampo" oninput="saveState()">
+                                <input type="text" id="targetInfo" class="form-control" placeholder="es. Conad oppure Lavanderie industriali" oninput="saveState()">
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">La tua Offerta / Prodotto</label>
@@ -101,23 +101,14 @@ HTML_TEMPLATE = """
                         </div>
 
                         <button type="button" class="btn btn-primary w-100 mb-3" id="btnGenera" onclick="generaBozzaEmail()">
-                            🤖 1. Genera Bozza con IA
+                            🤖 Genera Bozza con IA
                         </button>
 
                         <div id="emailPreviewArea" style="display: none;" class="p-3 bg-white border rounded">
                             <div class="mb-3">
-                                <label class="form-label"><strong>Dominio Web Aziendale Target:</strong></label>
-                                <div class="input-group">
-                                    <input type="text" id="targetDomain" class="form-control" placeholder="es. lavanderialampo.it" oninput="saveState()">
-                                    <button class="btn btn-outline-primary" type="button" onclick="cercaEmailDominio()">🔍 Cerca Email Dominio</button>
-                                </div>
-                                <div id="foundEmailsCount" class="form-text mt-2"></div>
-                                <div id="emailsListContainer" class="mt-2 p-2 bg-light border rounded" style="display: none; max-height: 150px; overflow-y: auto;">
-                                    <small class="text-muted fw-bold mb-1 d-block">Indirizzi email trovati:</small>
-                                    <ul id="emailsList" class="mb-0 ps-3 small text-secondary"></ul>
-                                </div>
+                                <label class="form-label"><strong>Email Destinatario (per invio):</strong></label>
+                                <input type="email" id="targetEmail" class="form-control" placeholder="inserisci email destinatario" oninput="saveState()">
                             </div>
-
                             <div class="mb-3">
                                 <label class="form-label"><strong>Oggetto Email:</strong></label>
                                 <input type="text" id="emailSubject" class="form-control" oninput="saveState()">
@@ -128,8 +119,8 @@ HTML_TEMPLATE = """
                             </div>
 
                             <div class="d-flex gap-2">
-                                <button type="button" class="btn btn-outline-secondary w-50" onclick="generaBozzaEmail()">🔄 Rigenera Bozza</button>
-                                <button type="button" class="btn btn-success w-50" id="btnInviaAuto" onclick="avviaCampagnaAutomatica()">🚀 2. Avvia Bot Invio su Dominio</button>
+                                <button type="button" class="btn btn-outline-secondary w-50" onclick="generaBozzaEmail()">🔄 Rigenera</button>
+                                <button type="button" class="btn btn-success w-50" id="btnInvia" onclick="inviaEmail()">🚀 Invia Email</button>
                             </div>
                             <div id="statusMessage" class="mt-2 text-center"></div>
                         </div>
@@ -141,27 +132,26 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-    // Salvataggio e ripristino automatico dati form su ricarica pagina
     function saveState() {
         const state = {
             targetInfo: document.getElementById("targetInfo").value,
             myProduct: document.getElementById("myProduct").value,
-            targetDomain: document.getElementById("targetDomain").value,
+            targetEmail: document.getElementById("targetEmail").value,
             emailSubject: document.getElementById("emailSubject").value,
             emailBody: document.getElementById("emailBody").value,
             previewVisible: document.getElementById("emailPreviewArea").style.display !== "none"
         };
-        localStorage.setItem("dashboard_email_state", JSON.stringify(state));
+        localStorage.setItem("dashboard_state", JSON.stringify(state));
     }
 
     function loadState() {
-        const saved = localStorage.getItem("dashboard_email_state");
+        const saved = localStorage.getItem("dashboard_state");
         if (saved) {
             try {
                 const state = JSON.parse(saved);
                 if (state.targetInfo) document.getElementById("targetInfo").value = state.targetInfo;
                 if (state.myProduct) document.getElementById("myProduct").value = state.myProduct;
-                if (state.targetDomain) document.getElementById("targetDomain").value = state.targetDomain;
+                if (state.targetEmail) document.getElementById("targetEmail").value = state.targetEmail;
                 if (state.emailSubject) document.getElementById("emailSubject").value = state.emailSubject;
                 if (state.emailBody) document.getElementById("emailBody").value = state.emailBody;
                 if (state.previewVisible) document.getElementById("emailPreviewArea").style.display = "block";
@@ -170,10 +160,10 @@ HTML_TEMPLATE = """
     }
 
     function resetForm() {
-        localStorage.removeItem("dashboard_email_state");
+        localStorage.removeItem("dashboard_state");
         document.getElementById("targetInfo").value = "";
         document.getElementById("myProduct").value = "";
-        document.getElementById("targetDomain").value = "";
+        document.getElementById("targetEmail").value = "";
         document.getElementById("emailSubject").value = "";
         document.getElementById("emailBody").value = "";
         document.getElementById("emailPreviewArea").style.display = "none";
@@ -187,6 +177,11 @@ HTML_TEMPLATE = """
         const productEl = document.getElementById("myProduct");
         const btnGenera = document.getElementById("btnGenera");
 
+        if (!targetEl || !productEl) {
+            alert("Errore: Impossibile trovare i campi di testo.");
+            return;
+        }
+
         const target = targetEl.value.trim();
         const product = productEl.value.trim();
 
@@ -196,7 +191,7 @@ HTML_TEMPLATE = """
         }
 
         btnGenera.disabled = true;
-        btnGenera.innerText = "⏳ Generazione bozza e ricerca dominio in corso...";
+        btnGenera.innerText = "⏳ Generazione bozza in corso...";
 
         try {
             const res = await fetch("/api/generate-email-draft", {
@@ -213,9 +208,6 @@ HTML_TEMPLATE = """
             if(data.success) {
                 document.getElementById("emailSubject").value = data.subject;
                 document.getElementById("emailBody").value = data.body;
-                if (data.domain) {
-                    document.getElementById("targetDomain").value = data.domain;
-                }
                 document.getElementById("emailPreviewArea").style.display = "block";
                 saveState();
             } else {
@@ -225,75 +217,31 @@ HTML_TEMPLATE = """
             alert("Errore di connessione con il server.");
         } finally {
             btnGenera.disabled = false;
-            btnGenera.innerText = "🤖 1. Genera Bozza con IA";
+            btnGenera.innerText = "🤖 Genera Bozza con IA";
         }
     }
 
-    async function cercaEmailDominio() {
-        const domain = document.getElementById("targetDomain").value.trim();
-        const countDiv = document.getElementById("foundEmailsCount");
-        const listContainer = document.getElementById("emailsListContainer");
-        const listUl = document.getElementById("emailsList");
-
-        if(!domain) {
-            alert("Inserisci un dominio valido!");
-            return;
-        }
-
-        countDiv.innerHTML = '<span class="text-info">🔍 Ricerca indirizzi email in corso...</span>';
-        listContainer.style.display = "none";
-        listUl.innerHTML = "";
-
-        try {
-            const res = await fetch("/api/find-domain-emails", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ domain: domain })
-            });
-
-            const data = await res.json();
-            if(data.success && data.count > 0) {
-                countDiv.innerHTML = `<span class="text-success" style="cursor: pointer;" onclick="toggleEmailList()">✅ Trovate <strong>${data.count}</strong> email pubbliche per ${domain}! <span class="text-decoration-underline">(clicca per mostrare/nascondere)</span></span>`;
-                
-                data.emails.forEach(email => {
-                    const li = document.createElement("li");
-                    li.textContent = email;
-                    listUl.appendChild(li);
-                });
-            } else {
-                countDiv.innerHTML = `<span class="text-warning">⚠️ Nessuna email trovata direttamente per il dominio ${domain}.</span>`;
-            }
-        } catch(e) {
-            countDiv.innerHTML = '<span class="text-danger">Errore durante la ricerca delle email.</span>';
-        }
-    }
-
-    function toggleEmailList() {
-        const listContainer = document.getElementById("emailsListContainer");
-        listContainer.style.display = (listContainer.style.display === "none") ? "block" : "none";
-    }
-
-    async function avviaCampagnaAutomatica() {
-        const domain = document.getElementById("targetDomain").value.trim();
+    async function inviaEmail() {
+        const toEmail = document.getElementById("targetEmail").value.trim();
         const subject = document.getElementById("emailSubject").value;
         const body = document.getElementById("emailBody").value;
-        const btnInvia = document.getElementById("btnInviaAuto");
+        const btnInvia = document.getElementById("btnInvia");
         const statusMsg = document.getElementById("statusMessage");
 
-        if(!domain) {
-            alert("Inserisci prima il dominio target!");
+        if(!toEmail) {
+            alert("Inserisci un indirizzo email valido!");
             return;
         }
 
         btnInvia.disabled = true;
-        statusMsg.innerHTML = '<span class="text-info">⏳ Avvio bot e invio massivo in corso...</span>';
+        statusMsg.innerHTML = '<span class="text-info">Invio in corso...</span>';
 
         try {
-            const res = await fetch("/api/send-auto-domain-campaign", {
+            const res = await fetch("/send-mail/", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    domain: domain,
+                    to_email: toEmail,
                     subject: subject,
                     body: body
                 })
@@ -301,12 +249,12 @@ HTML_TEMPLATE = """
 
             const data = await res.json();
             if(res.ok) {
-                statusMsg.innerHTML = `<span class="text-success">✅ ${data.message}</span>`;
+                statusMsg.innerHTML = '<span class="text-success">✅ Email presa in carico e inviata con successo!</span>';
             } else {
-                statusMsg.innerHTML = `<span class="text-danger">❌ Errore: ${data.detail || 'Impossibile avviare la campagna.'}</span>`;
+                statusMsg.innerHTML = '<span class="text-danger">❌ Errore durante invio.</span>';
             }
         } catch(e) {
-            statusMsg.innerHTML = '<span class="text-danger">❌ Errore di connessione con il server.</span>';
+            statusMsg.innerHTML = '<span class="text-danger">❌ Errore di connessione.</span>';
         } finally {
             btnInvia.disabled = false;
         }
