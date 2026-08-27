@@ -82,7 +82,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
 
     try:
         response = client.models.generate_content(
-            model="gemini-3.5-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
             config=types.GenerateContentConfig(tools=tools_list, temperature=0.3)
         )
@@ -121,7 +121,7 @@ def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
 
     try:
         response = client.models.generate_content(
-            model="gemini-3.5-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -173,7 +173,7 @@ def trova_email_dominio_ia(domain: str) -> dict:
 
     try:
         response = client.models.generate_content(
-            model="gemini-3.5-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
