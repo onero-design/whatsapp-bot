@@ -113,7 +113,6 @@ HTML_TEMPLATE = """
                                 <div id="foundEmailsCount" class="form-text mt-2"></div>
                             </div>
 
-                            <!-- CAMPO EMAIL DESTINATARIO -->
                             <div class="mb-3">
                                 <label class="form-label"><strong>Email Destinatario:</strong></label>
                                 <input type="email" id="destEmail" class="form-control" placeholder="es. info@conad.it">
@@ -130,7 +129,6 @@ HTML_TEMPLATE = """
 
                             <div class="d-flex gap-2">
                                 <button type="button" class="btn btn-outline-secondary w-50" onclick="generaBozzaEmail()">🔄 Rigenera Bozza</button>
-                                <!-- TASTO INVIA EMAIL -->
                                 <button type="button" class="btn btn-success w-50" id="btnInvia" onclick="inviaEmail()">🚀 Invia Email</button>
                             </div>
                             <div id="statusMessage" class="mt-2 text-center"></div>
@@ -162,7 +160,7 @@ HTML_TEMPLATE = """
         }
 
         btnGenera.disabled = true;
-        btnGenera.innerText = "⏳ Generazione bozza in corso...";
+        btnGenera.innerText = "Generazione bozza in corso...";
 
         try {
             const res = await fetch("/api/generate-email-draft", {
@@ -202,7 +200,7 @@ HTML_TEMPLATE = """
         }
 
         const domain = domainInput.value.trim();
-        countDiv.innerHTML = '<span class="text-info">🔍 Ricerca indirizzi email in corso...</span>';
+        countDiv.innerHTML = '<span class="text-info">Ricerca indirizzi email in corso...</span>';
 
         try {
             const res = await fetch("/api/find-domain-emails", {
@@ -213,15 +211,15 @@ HTML_TEMPLATE = """
 
             const data = await res.json();
             if(data.success && data.count > 0) {
-                countDiv.innerHTML = `<span class="text-success">✅ Trovate <strong>${data.count}</strong> email pubbliche per ${domain}!</span>`;
+                countDiv.innerHTML = '<span class="text-success">✅ Trovate ' + data.count + ' email pubbliche per ' + domain + '!</span>';
                 if (data.emails && data.emails.length > 0) {
                     destEmail.value = data.emails[0];
                 } else {
-                    destEmail.value = `info@${domain}`;
+                    destEmail.value = "info@" + domain;
                 }
             } else {
-                countDiv.innerHTML = `<span class="text-warning">⚠️ Nessuna email trovata direttamente per il dominio ${domain}.</span>`;
-                destEmail.value = `info@${domain}`;
+                countDiv.innerHTML = '<span class="text-warning">⚠️ Nessuna email trovata direttamente per il dominio ' + domain + '.</span>';
+                destEmail.value = "info@" + domain;
             }
         } catch(e) {
             countDiv.innerHTML = '<span class="text-danger">Errore durante la ricerca delle email.</span>';
@@ -241,7 +239,7 @@ HTML_TEMPLATE = """
         }
 
         btnInvia.disabled = true;
-        statusMsg.innerHTML = '<span class="text-info">Invio email in corso...</span>';
+        statusMsg.innerHTML = '<span class="text-info">Invio in corso...</span>';
 
         try {
             const res = await fetch("/send-mail/", {
@@ -257,7 +255,7 @@ HTML_TEMPLATE = """
             if(res.ok) {
                 statusMsg.innerHTML = '<span class="text-success">✅ Email inviata con successo!</span>';
             } else {
-                statusMsg.innerHTML = '<span class="text-danger">❌ Errore durante l\'invio dell\'email.</span>';
+                statusMsg.innerHTML = '<span class="text-danger">❌ Errore durante l invio dell email.</span>';
             }
         } catch(e) {
             statusMsg.innerHTML = '<span class="text-danger">❌ Errore di connessione.</span>';
