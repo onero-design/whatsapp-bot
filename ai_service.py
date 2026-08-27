@@ -1,4 +1,5 @@
 import os
+import json
 from datetime import datetime
 from google import genai
 from google.genai import types
@@ -43,7 +44,7 @@ def fissa_appuntamento(azienda_id: int, data_ora: str, servizio: str, nome_clien
     db.commit()
     return f"Appuntamento confermato con successo per {nome_cliente} in data {data_ora} per il servizio {servizio}."
 
-# --- MOTORE DI RISPOSTA IA ---
+# --- MOTORE DI RISPOSTA IA (WHATSAPP) ---
 def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session: Session, SlotAgenda, Messaggio) -> str:
     if not client:
         return "Servizio IA non disponibile."
@@ -81,22 +82,16 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
 
     try:
         response = client.models.generate_content(
-            model="gemini-3.5-flash",
+            model="gemini-3.6-flash",
             contents=prompt,
-            config=types.GenerateContentConfig(tools=tools_list, temperature=0.3)
+            config=types.GenerateContentConfig(tools=tools_list)
         )
         return response.text.strip()
-    except Exception:
-        try:
-            response = client.models.generate_content(
-                model="gemini-3.5-flash-lite",
-                contents=prompt,
-                config=types.GenerateContentConfig(tools=tools_list, temperature=0.3)
-            )
-            return response.text.strip()
-        except Exception:
-            return "Grazie per il messaggio! Un operatore ti risponderà a breve."
+    except Exception as e:
+        print(f"Errore Gemini WhatsApp: {e}")
+        return "Grazie per il messaggio! Un operatore ti risponderà a breve."
 
+# --- GENERATORE DI BOZZE EMAIL B2B ---
 def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
     if not client:
         return {"success": False, "error": "Servizio IA non disponibile."}
@@ -117,19 +112,16 @@ def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
         "body": "Testo dell'email formattato con a capo e una Call To Action finale"
     }}
     """
-    # ... il resto della funzione resta identico al tuo codice originale
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
             contents=prompt,
             config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.7
+                response_mime_type="application/json"
             )
         )
         
-        import json
         data = json.loads(response.text.strip())
         return {
             "success": True,
@@ -139,34 +131,51 @@ def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+# --- RICERCA EMAIL DOMINIO ---
 def trova_email_dominio_ia(domain: str) -> dict:
     if not client:
         return {"success": False, "count": 0, "emails": []}
 
-    clean_domain = domain.lower().replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0].strip()
+    input_clean = domain.strip().lower()
+
+    if "@" in input_clean and "." in input_clean.split("@")[-1]:
+        return {
+            "success": True,
+            "count": 1,
+            "emails": [input_clean]
+        }
+
+    clean_domain = input_clean.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0].strip()
 
     prompt = f"""
-    Genera i 6 indirizzi email aziendali e commerciali più probabili per il dominio web "{clean_domain}".
-    Includi sempre i formati classici (es. info@{clean_domain}, commerciale@{clean_domain}, contatti@{clean_domain}, vendite@{clean_domain}, amministrazione@{clean_domain}, direzione@{clean_domain}).
+    Genera i 5 indirizzi email aziendali e commerciali più probabili per il dominio web "{clean_domain}".
+    Esempi tipici: info@{clean_domain}, commerciale@{clean_domain}, contatti@{clean_domain}, vendite@{clean_domain}, direzione@{clean_domain}.
 
-    Rispondi ESCLUSIVAMENTE con un JSON valido strutturato così:
+    Rispondi ESCLUSIVAMENTE con un JSON valido con questa struttura esatta:
     {{
-        "emails": ["info@{clean_domain}", "commerciale@{clean_domain}", "contatti@{clean_domain}"]
+        "emails": ["info@{clean_domain}", "commerciale@{clean_domain}", "contatti@{clean_domain}", "vendite@{clean_domain}", "direzione@{clean_domain}"]
     }}
     """
 
+    fallback_list = [
+        f"info@{clean_domain}", 
+        f"commerciale@{clean_domain}", 
+        f"contatti@{clean_domain}", 
+        f"vendite@{clean_domain}"
+    ]
+
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
             contents=prompt,
             config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1
+                response_mime_type="application/json"
             )
         )
-        import json
         data = json.loads(response.text.strip())
         emails = data.get("emails", [])
+        if not emails:
+            emails = fallback_list
         return {
             "success": True,
             "count": len(emails),
@@ -175,6 +184,6 @@ def trova_email_dominio_ia(domain: str) -> dict:
     except Exception as e:
         return {
             "success": True, 
-            "count": 1, 
-            "emails": [f"info@{clean_domain}"]
+            "count": len(fallback_list), 
+            "emails": fallback_list
         }
