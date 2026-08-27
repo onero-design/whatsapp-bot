@@ -190,16 +190,18 @@ HTML_TEMPLATE = """
             btnGenera.innerText = "🤖 1. Genera Bozza con IA";
         }
     }
+
     async function cercaEmailDominio() {
-        const domain = document.getElementById("targetDomain").value.trim();
+        const domainInput = document.getElementById("targetDomain");
         const countDiv = document.getElementById("foundEmailsCount");
         const destEmail = document.getElementById("destEmail");
 
-        if(!domain) {
+        if(!domainInput || !domainInput.value.trim()) {
             alert("Inserisci un dominio valido!");
             return;
         }
 
+        const domain = domainInput.value.trim();
         countDiv.innerHTML = '<span class="text-info">🔍 Ricerca indirizzi email in corso...</span>';
 
         try {
@@ -212,7 +214,6 @@ HTML_TEMPLATE = """
             const data = await res.json();
             if(data.success && data.count > 0) {
                 countDiv.innerHTML = `<span class="text-success">✅ Trovate <strong>${data.count}</strong> email pubbliche per ${domain}!</span>`;
-                // Se la ricerca restituisce delle email, popola il campo destinatario
                 if (data.emails && data.emails.length > 0) {
                     destEmail.value = data.emails[0];
                 } else {
@@ -250,7 +251,7 @@ HTML_TEMPLATE = """
                     to_email: toEmail,
                     subject: subject,
                     body: body
-                 })
+                })
             });
 
             if(res.ok) {
@@ -263,8 +264,7 @@ HTML_TEMPLATE = """
         } finally {
             btnInvia.disabled = false;
         }
-}
-    
+    }
     </script>
 </body>
 </html>
