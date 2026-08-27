@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, Column, Integer, String, DateTime, Foreign
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, Session
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from ai_service import genera_risposta_gemini, genera_bozza_email_b2b
+from ai_service import genera_risposta_gemini, genera_bozza_email_b2b, trova_email_dominio_ia
 from dashboard import get_dashboard_routes
 from instagram import get_instagram_routes
 
@@ -218,11 +218,4 @@ class DomainSearchRequest(BaseModel):
 
 @app.post("/api/find-domain-emails")
 async def find_domain_emails_endpoint(data: DomainSearchRequest):
-    clean_domain = data.domain.lower().replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0].strip()
-    
-    # Restituisce l'email standard del dominio per sbloccare il tasto
-    return {
-        "success": True,
-        "count": 1,
-        "emails": [f"info@{clean_domain}"]
-    }
+    return trova_email_dominio_ia(data.domain)
