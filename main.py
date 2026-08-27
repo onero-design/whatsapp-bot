@@ -199,7 +199,7 @@ async def send_mail_endpoint(payload: EmailSchema, background_tasks: BackgroundT
     background_tasks.add_task(send_email, payload.to_email, payload.subject, payload.body)
     return {"status": "success", "message": "Email presa in carico e in fase di invio."}
 
-# --- NUOVA SEZIONE: GENERATORE DI BOZZE EMAIL B2B CON IA ---
+# --- GENERATORE DI BOZZE EMAIL B2B CON IA ---
 class DraftEmailRequest(BaseModel):
     target_info: str
     offerta_azienda: str
@@ -212,7 +212,7 @@ async def generate_email_draft(data: DraftEmailRequest):
     )
     return result
 
-# --- NUOVA ROTTA RICERCA EMAIL DOMINIO ---
+# --- ROTTA RICERCA EMAIL DOMINIO CON IA ---
 class DomainSearchRequest(BaseModel):
     domain: str
 
