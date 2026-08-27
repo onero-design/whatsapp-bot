@@ -115,6 +115,9 @@ HTML_TEMPLATE = """
 
                             <div class="mb-3">
                                 <label class="form-label"><strong>Email Destinatario:</strong></label>
+                                <div id="emailSelectContainer" style="display:none;" class="mb-2">
+                                    <select id="emailSelect" class="form-select" onchange="selezionaEmailDallaLista(this.value)"></select>
+                                </div>
                                 <input type="email" id="destEmail" class="form-control" placeholder="es. info@conad.it">
                             </div>
 
@@ -189,17 +192,32 @@ HTML_TEMPLATE = """
         }
     }
 
+    function selezionaEmailDallaLista(val) {
+        document.getElementById("destEmail").value = val;
+    }
+
     async function cercaEmailDominio() {
         const domainInput = document.getElementById("targetDomain");
         const countDiv = document.getElementById("foundEmailsCount");
         const destEmail = document.getElementById("destEmail");
+        const emailSelectContainer = document.getElementById("emailSelectContainer");
+        const emailSelect = document.getElementById("emailSelect");
 
         if(!domainInput || !domainInput.value.trim()) {
-            alert("Inserisci un dominio valido!");
+            alert("Inserisci un dominio o un'email valida!");
             return;
         }
 
         const domain = domainInput.value.trim();
+
+        // Se l'utente scrive un'email completa invece del solo dominio
+        if(domain.includes("@") && domain.includes(".")) {
+            destEmail.value = domain;
+            emailSelectContainer.style.display = "none";
+            countDiv.innerHTML = '<span class="text-success">✅ Indirizzo email inserito direttamente!</span>';
+            return;
+        }
+
         countDiv.innerHTML = '<span class="text-info">Ricerca indirizzi email in corso...</span>';
 
         try {
@@ -210,16 +228,23 @@ HTML_TEMPLATE = """
             });
 
             const data = await res.json();
-            if(data.success && data.count > 0) {
-                countDiv.innerHTML = '<span class="text-success">✅ Trovate ' + data.count + ' email pubbliche per ' + domain + '!</span>';
-                if (data.emails && data.emails.length > 0) {
-                    destEmail.value = data.emails[0];
-                } else {
-                    destEmail.value = "info@" + domain;
-                }
+            if(data.success && data.emails && data.emails.length > 0) {
+                countDiv.innerHTML = '<span class="text-success">✅ Trovate <strong>' + data.emails.length + '</strong> email per ' + domain + '! Scegli dal menu o modifica sotto:</span>';
+                
+                emailSelect.innerHTML = "";
+                data.emails.forEach(email => {
+                    const opt = document.createElement("option");
+                    opt.value = email;
+                    opt.innerText = email;
+                    emailSelect.appendChild(opt);
+                });
+                
+                emailSelectContainer.style.display = "block";
+                destEmail.value = data.emails[0];
             } else {
-                countDiv.innerHTML = '<span class="text-warning">⚠️ Nessuna email trovata direttamente per il dominio ' + domain + '.</span>';
+                countDiv.innerHTML = '<span class="text-warning">⚠️ Generata email di fallback per ' + domain + '.</span>';
                 destEmail.value = "info@" + domain;
+                emailSelectContainer.style.display = "none";
             }
         } catch(e) {
             countDiv.innerHTML = '<span class="text-danger">Errore durante la ricerca delle email.</span>';
