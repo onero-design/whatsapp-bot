@@ -90,7 +90,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
     except Exception:
         try:
             response = client.models.generate_content(
-                model="gemini-3.5-flash",
+                model="gemini-2.5-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(tools=tools_list, temperature=0.3)
             )
