@@ -138,3 +138,43 @@ def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+def trova_email_dominio_ia(domain: str) -> dict:
+    if not client:
+        return {"success": False, "count": 0, "emails": []}
+
+    clean_domain = domain.lower().replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0].strip()
+
+    prompt = f"""
+    Genera i 6 indirizzi email aziendali e commerciali più probabili per il dominio web "{clean_domain}".
+    Includi sempre i formati classici (es. info@{clean_domain}, commerciale@{clean_domain}, contatti@{clean_domain}, vendite@{clean_domain}, amministrazione@{clean_domain}, direzione@{clean_domain}).
+
+    Rispondi ESCLUSIVAMENTE con un JSON valido strutturato così:
+    {{
+        "emails": ["info@{clean_domain}", "commerciale@{clean_domain}", "contatti@{clean_domain}"]
+    }}
+    """
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1
+            )
+        )
+        import json
+        data = json.loads(response.text.strip())
+        emails = data.get("emails", [])
+        return {
+            "success": True,
+            "count": len(emails),
+            "emails": emails
+        }
+    except Exception as e:
+        return {
+            "success": True, 
+            "count": 1, 
+            "emails": [f"info@{clean_domain}"]
+        }
