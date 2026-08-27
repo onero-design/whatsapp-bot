@@ -148,7 +148,7 @@ def trova_email_dominio_ia(domain: str) -> dict:
     clean_domain = input_clean.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0].strip()
 
     prompt = f"""
-    Genera i 5 indirizzi email aziendali e commerciali più probabili per il dominio web "{clean_domain}".
+    Genera i 30 indirizzi email aziendali e commerciali più probabili per il dominio web "{clean_domain}".
     Esempi tipici: info@{clean_domain}, commerciale@{clean_domain}, contatti@{clean_domain}, vendite@{clean_domain}, direzione@{clean_domain}.
 
     Rispondi ESCLUSIVAMENTE con un JSON valido con questa struttura esatta:
