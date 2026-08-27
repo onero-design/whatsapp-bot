@@ -107,10 +107,16 @@ HTML_TEMPLATE = """
                             <div class="mb-3">
                                 <label class="form-label"><strong>Dominio Web Aziendale Target:</strong></label>
                                 <div class="input-group">
-                                    <input type="text" id="targetDomain" class="form-control" placeholder="es. lavanderialampo.it">
+                                    <input type="text" id="targetDomain" class="form-control" placeholder="es. conad.it">
                                     <button class="btn btn-outline-primary" type="button" onclick="cercaEmailDominio()">🔍 Cerca Email Dominio</button>
                                 </div>
                                 <div id="foundEmailsCount" class="form-text mt-2"></div>
+                            </div>
+
+                            <!-- CAMPO EMAIL DESTINATARIO -->
+                            <div class="mb-3">
+                                <label class="form-label"><strong>Email Destinatario:</strong></label>
+                                <input type="email" id="destEmail" class="form-control" placeholder="es. info@conad.it">
                             </div>
 
                             <div class="mb-3">
@@ -124,6 +130,8 @@ HTML_TEMPLATE = """
 
                             <div class="d-flex gap-2">
                                 <button type="button" class="btn btn-outline-secondary w-50" onclick="generaBozzaEmail()">🔄 Rigenera Bozza</button>
+                                <!-- TASTO INVIA EMAIL -->
+                                <button type="button" class="btn btn-success w-50" id="btnInvia" onclick="inviaEmail()">🚀 Invia Email</button>
                             </div>
                             <div id="statusMessage" class="mt-2 text-center"></div>
                         </div>
@@ -182,10 +190,10 @@ HTML_TEMPLATE = """
             btnGenera.innerText = "🤖 1. Genera Bozza con IA";
         }
     }
-
     async function cercaEmailDominio() {
         const domain = document.getElementById("targetDomain").value.trim();
         const countDiv = document.getElementById("foundEmailsCount");
+        const destEmail = document.getElementById("destEmail");
 
         if(!domain) {
             alert("Inserisci un dominio valido!");
@@ -204,13 +212,59 @@ HTML_TEMPLATE = """
             const data = await res.json();
             if(data.success && data.count > 0) {
                 countDiv.innerHTML = `<span class="text-success">✅ Trovate <strong>${data.count}</strong> email pubbliche per ${domain}!</span>`;
+                // Se la ricerca restituisce delle email, popola il campo destinatario
+                if (data.emails && data.emails.length > 0) {
+                    destEmail.value = data.emails[0];
+                } else {
+                    destEmail.value = `info@${domain}`;
+                }
             } else {
                 countDiv.innerHTML = `<span class="text-warning">⚠️ Nessuna email trovata direttamente per il dominio ${domain}.</span>`;
+                destEmail.value = `info@${domain}`;
             }
         } catch(e) {
             countDiv.innerHTML = '<span class="text-danger">Errore durante la ricerca delle email.</span>';
         }
     }
+
+    async function inviaEmail() {
+        const toEmail = document.getElementById("destEmail").value.trim();
+        const subject = document.getElementById("emailSubject").value.trim();
+        const body = document.getElementById("emailBody").value.trim();
+        const btnInvia = document.getElementById("btnInvia");
+        const statusMsg = document.getElementById("statusMessage");
+
+        if(!toEmail || !subject || !body) {
+            alert("Assicurati che l'email del destinatario, l'oggetto e il testo siano compilati!");
+            return;
+        }
+
+        btnInvia.disabled = true;
+        statusMsg.innerHTML = '<span class="text-info">Invio email in corso...</span>';
+
+        try {
+            const res = await fetch("/send-mail/", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    to_email: toEmail,
+                    subject: subject,
+                    body: body
+                 })
+            });
+
+            if(res.ok) {
+                statusMsg.innerHTML = '<span class="text-success">✅ Email inviata con successo!</span>';
+            } else {
+                statusMsg.innerHTML = '<span class="text-danger">❌ Errore durante l\'invio dell\'email.</span>';
+            }
+        } catch(e) {
+            statusMsg.innerHTML = '<span class="text-danger">❌ Errore di connessione.</span>';
+        } finally {
+            btnInvia.disabled = false;
+        }
+}
+    
     </script>
 </body>
 </html>
