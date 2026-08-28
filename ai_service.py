@@ -92,24 +92,35 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         return "Grazie per il messaggio! Un operatore ti risponderà a breve."
 
 # --- GENERATORE DI BOZZE EMAIL B2B ---
-def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
+def genera_bozza_email_b2b(azienda, target_info: str, offerta_azienda: str) -> dict:
     if not client:
         return {"success": False, "error": "Servizio IA non disponibile."}
 
+    # Estraiamo le istruzioni/catalogo salvate per l'azienda
+    istruzioni_azienda = getattr(azienda, 'istruzioni_ia', '') if azienda else ''
+    nome_azienda = getattr(azienda, 'nome', 'Nostra Azienda') if azienda else 'Nostra Azienda'
+
     prompt = f"""
-    Sei un copywriter B2B esperto in cold outreach. 
-    Scrivi una mail di vendita professionale, breve (massimo 120 parole) e ad alto tasso di conversione.
+    Sei un esperto copywriter B2B di cold outreach.
+    Scrivi una mail di vendita professionale, breve (max 120 parole) e persuasiva.
 
-    Dati destinatario:
-    - Target: {target_info}
+    Dati della nostra azienda:
+    - Nome: {nome_azienda}
+    - Catalogo/Istruzioni/Prodotti: {istruzioni_azienda}
+    - Offerta specifica per questa mail: {offerta_azienda}
 
-    La nostra offerta/prodotto:
-    - {offerta_azienda}
+    Target della campagna:
+    - {target_info}
 
-    IMPORTANTE: Rispondi ESCLUSIVAMENTE con un oggetto JSON valido con questa struttura esatta:
+    COMPITI:
+    1. Genera un oggetto ed un corpo email d'impatto personalizzati sul nostro catalogo e target.
+    2. Suggerisci un dominio web di un'ipotetica azienda target perfetta per questa nicchia (es: "pasticceriarossi.it" o "bar-napoli.it").
+
+    Rispondi ESCLUSIVAMENTE con un JSON valido:
     {{
-        "subject": "Oggetto incisivo senza sembrare spam",
-        "body": "Testo dell'email formattato con a capo e una Call To Action finale"
+        "subject": "Oggetto della mail",
+        "body": "Testo della mail con firma finale a nome di {nome_azienda}",
+        "suggested_target_domain": "dominio-esempio.it"
     }}
     """
 
@@ -126,7 +137,8 @@ def genera_bozza_email_b2b(target_info: str, offerta_azienda: str) -> dict:
         return {
             "success": True,
             "subject": data.get("subject", ""),
-            "body": data.get("body", "")
+            "body": data.get("body", ""),
+            "suggested_target_domain": data.get("suggested_target_domain", "")
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
