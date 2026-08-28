@@ -172,7 +172,7 @@ def trova_email_dominio_ia(domain: str) -> dict:
         }
 
     prompt = f"""
-    Genera fino a 5 indirizzi email commerciali/aziendali verosimili e standard per il dominio aziendale reale "{clean_domain}".
+    Genera fino a 30 indirizzi email commerciali/aziendali verosimili e standard per il dominio aziendale reale "{clean_domain}".
     Esempi tipici: info@{clean_domain}, commerciale@{clean_domain}, contatti@{clean_domain}, direzione@{clean_domain}.
 
     Rispondi ESCLUSIVAMENTE con questo formato JSON:
