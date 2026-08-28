@@ -201,12 +201,15 @@ async def send_mail_endpoint(payload: EmailSchema, background_tasks: BackgroundT
 
 # --- GENERATORE DI BOZZE EMAIL B2B CON IA ---
 class DraftEmailRequest(BaseModel):
+    azienda_id: int
     target_info: str
     offerta_azienda: str
 
 @app.post("/api/generate-email-draft")
-async def generate_email_draft(data: DraftEmailRequest):
+async def generate_email_draft(data: DraftEmailRequest, db: Session = Depends(get_db)):
+    azienda = db.query(Azienda).filter(Azienda.id == data.azienda_id).first()
     result = genera_bozza_email_b2b(
+        azienda=azienda,
         target_info=data.target_info,
         offerta_azienda=data.offerta_azienda
     )
