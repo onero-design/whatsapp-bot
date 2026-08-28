@@ -148,6 +148,11 @@ HTML_TEMPLATE = """
         const targetEl = document.getElementById("targetInfo");
         const productEl = document.getElementById("myProduct");
         const btnGenera = document.getElementById("btnGenera");
+        const targetDomainInput = document.getElementById("targetDomain");
+
+        // Estraiamo l'azienda_id dall'URL corrente (es. /dashboard/1)
+        const urlParts = window.location.pathname.split("/");
+        const aziendaId = urlParts[urlParts.length - 1];
 
         if (!targetEl || !productEl) {
             alert("Errore: Impossibile trovare i campi di testo.");
@@ -170,6 +175,7 @@ HTML_TEMPLATE = """
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
+                    azienda_id: parseInt(aziendaId),
                     target_info: target,
                     offerta_azienda: product
                 })
@@ -180,6 +186,12 @@ HTML_TEMPLATE = """
             if(data.success) {
                 document.getElementById("emailSubject").value = data.subject;
                 document.getElementById("emailBody").value = data.body;
+            
+                // Se l'IA ha suggerito un dominio target pertinente, lo inseriamo
+                if(data.suggested_target_domain) {
+                    targetDomainInput.value = data.suggested_target_domain;
+                }
+
                 document.getElementById("emailPreviewArea").style.display = "block";
             } else {
                 alert("Errore IA: " + (data.error || "Impossibile generare la bozza"));
