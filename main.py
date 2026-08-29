@@ -278,3 +278,55 @@ class DomainSearchRequest(BaseModel):
 @app.post("/api/find-domain-emails")
 async def find_domain_emails_endpoint(data: DomainSearchRequest):
     return trova_email_dominio_ia(data.domain)
+
+
+
+
+
+
+# --- ROTTA TEMPORANEA CREAZIONE UTENTI (DA RIMUOVERE DOPO L'USO) ---
+@app.get("/crea-utenti-secret")
+def crea_utenti_endpoint(db: Session = Depends(get_db)):
+    try:
+        # 1. Barber Shop
+        barber = db.query(Azienda).filter(Azienda.nome == "Barber Shop Milano").first()
+        if not barber:
+            barber = Azienda(
+                nome="Barber Shop Milano",
+                numero_whatsapp_business="whatsapp:+14155238886",
+                istruzioni_ia="Sei l'assistente di Barber Shop Milano. Taglio 20€, Barba 10€."
+            )
+            db.add(barber)
+            db.commit()
+            db.refresh(barber)
+
+        if not db.query(Utente).filter(Utente.email == "barber@test.it").first():
+            db.add(Utente(
+                email="barber@test.it",
+                password_hash=genera_hash_password("password123"),
+                azienda_id=barber.id
+            ))
+
+        # 2. Centro Estetico
+        estetica = db.query(Azienda).filter(Azienda.nome == "Centro Estetico Bella").first()
+        if not estetica:
+            estetica = Azienda(
+                nome="Centro Estetico Bella",
+                numero_whatsapp_business="whatsapp:+390000000000",
+                istruzioni_ia="Sei l'assistente del Centro Estetico. Pulizia viso 45€."
+            )
+            db.add(estetica)
+            db.commit()
+            db.refresh(estetica)
+
+        if not db.query(Utente).filter(Utente.email == "estetica@test.it").first():
+            db.add(Utente(
+                email="estetica@test.it",
+                password_hash=genera_hash_password("password123"),
+                azienda_id=estetica.id
+            ))
+
+        db.commit()
+        return {"status": "successo", "messaggio": "Utenti di test creati nel database!"}
+    except Exception as e:
+        return {"status": "errore", "dettaglio": str(e)}
