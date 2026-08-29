@@ -294,3 +294,23 @@ async def find_domain_emails_endpoint(data: DomainSearchRequest):
 def lista_aziende(db: Session = Depends(get_db)):
     aziende = db.query(Azienda).all()
     return [{"id": a.id, "nome": a.nome, "numero_whatsapp": a.numero_whatsapp_business} for a in aziende]
+
+@app.get("/imposta-numero/{azienda_id}")
+def imposta_numero_sandbox(azienda_id: int, db: Session = Depends(get_db)):
+    num_sandbox = "whatsapp:+14155238886"
+    
+    # 1. Libera il numero di test da chiunque lo stia usando
+    vecchia = db.query(Azienda).filter(Azienda.numero_whatsapp_business == num_sandbox).first()
+    if vecchia:
+        vecchia.numero_whatsapp_business = f"whatsapp:+39000000000{vecchia.id}"
+        db.commit()
+
+    # 2. Assegna il numero di test all'azienda scelta
+    target = db.query(Azienda).filter(Azienda.id == azienda_id).first()
+    if not target:
+        return {"status": "errore", "messaggio": "Azienda non trovata"}
+
+    target.numero_whatsapp_business = num_sandbox
+    db.commit()
+
+    return {"status": "successo", "messaggio": f"Il numero WhatsApp di test ora risponde per: {target.nome}"}
