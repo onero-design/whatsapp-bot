@@ -12,3 +12,5 @@ email-validator
 requests
 pydantic
 beautifulsoup4
+passlib[bcryp]
+python-jose
