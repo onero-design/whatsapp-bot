@@ -281,19 +281,20 @@ async def find_domain_emails_endpoint(data: DomainSearchRequest):
 
 
 
-
-
-
-# --- ROTTA TEMPORANEA CREAZIONE UTENTI (DA RIMUOVERE DOPO L'USO) ---
+# --- ROTTA TEMPORANEA CREAZIONE UTENTI ---
 @app.get("/crea-utenti-secret")
 def crea_utenti_endpoint(db: Session = Depends(get_db)):
     try:
         # 1. Barber Shop
-        barber = db.query(Azienda).filter(Azienda.nome == "Barber Shop Milano").first()
+        num1 = "whatsapp:+14155238886"
+        barber = db.query(Azienda).filter(
+            (Azienda.nome == "Barber Shop Milano") | (Azienda.numero_whatsapp_business == num1)
+        ).first()
+        
         if not barber:
             barber = Azienda(
                 nome="Barber Shop Milano",
-                numero_whatsapp_business="whatsapp:+14155238886",
+                numero_whatsapp_business=num1,
                 istruzioni_ia="Sei l'assistente di Barber Shop Milano. Taglio 20€, Barba 10€."
             )
             db.add(barber)
@@ -308,11 +309,15 @@ def crea_utenti_endpoint(db: Session = Depends(get_db)):
             ))
 
         # 2. Centro Estetico
-        estetica = db.query(Azienda).filter(Azienda.nome == "Centro Estetico Bella").first()
+        num2 = "whatsapp:+390000000000"
+        estetica = db.query(Azienda).filter(
+            (Azienda.nome == "Centro Estetico Bella") | (Azienda.numero_whatsapp_business == num2)
+        ).first()
+        
         if not estetica:
             estetica = Azienda(
                 nome="Centro Estetico Bella",
-                numero_whatsapp_business="whatsapp:+390000000000",
+                numero_whatsapp_business=num2,
                 istruzioni_ia="Sei l'assistente del Centro Estetico. Pulizia viso 45€."
             )
             db.add(estetica)
@@ -327,6 +332,8 @@ def crea_utenti_endpoint(db: Session = Depends(get_db)):
             ))
 
         db.commit()
-        return {"status": "successo", "messaggio": "Utenti di test creati nel database!"}
+        return {"status": "successo", "messaggio": "Utenti creati o collegati con successo!"}
     except Exception as e:
         return {"status": "errore", "dettaglio": str(e)}
+
+
