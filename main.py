@@ -197,49 +197,62 @@ def home(request: Request, db: Session = Depends(get_db)):
         return RedirectResponse(url=f"/dashboard/{cookie_azienda}", status_code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
     
+# --- WEBHOOK WHATSAPP (TWILIO) MULTI-AZIENDA ---
 @app.post("/whatsapp-webhook")
-async def whatsapp_webhook(
-    From: str = Form(...),
-    To: str = Form(...),
-    Body: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    # 1. Identifica l'azienda destinataria dal numero WhatsApp che riceve ('To')
-    azienda = db.query(Azienda).filter(Azienda.numero_whatsapp_business == To).first()
+async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str = Form(...), db: Session = Depends(get_db)):
+    numero_cliente = From
+    numero_business = To
+    messaggio_utente = Body.strip()
+
+    # 1. Recupera l'azienda associata al numero WhatsApp che riceve il messaggio
+    azienda = db.query(Azienda).filter(Azienda.numero_whatsapp_business == numero_business).first()
     
+    # Se il numero non è ancora associato a nessuna azienda, crea una configurazione fallback
     if not azienda:
-        resp = MessagingResponse()
-        resp.message("Sistema: Questo numero WhatsApp non appartiene a nessuna azienda configurata.")
-        return Response(content=str(resp), media_type="application/xml")
-
-    # 2. Prompt dinamico con il contesto dell'azienda trovata
-    prompt_sistema = f"""
-    {azienda.istruzioni_ia}
-    
-    Informazioni contesto:
-    - Nome Attività: {azienda.nome}
-    - Data e ora correnti: {datetime.now().strftime('%d/%m/%Y %H:%M')}
-    
-    Rispondi sempre in modo cortese, conciso e adatto a una conversazione WhatsApp.
-    """
-
-    # 3. Chiamata ad OpenAI
-    try:
-        response_ai = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": prompt_sistema},
-                {"role": "user", "content": Body}
-            ]
+        istruzioni_default = (
+            "Sei l'assistente della Pasticceria.\n"
+            "Servizi: Torte 1kg (10€), Torte 2kg (15€), Cornetti (1.50€).\n"
+            "Orari: Lun-Sab dalle 7:00 alle 19:00.\n"
+            "Regola: Quando chiedono di prenotare, verifica la disponibilità e chiedi il nome."
         )
-        risposta_testo = response_ai.choices[0].message.content
-    except Exception as e:
-        print(f"ERRORE: {e}")
-        risposta_testo = f"Errore rilevato: {e}"
+        azienda = Azienda(
+            nome="Pasticceria Demo",
+            numero_whatsapp_business=numero_business,
+            istruzioni_ia=istruzioni_default
+        )
+        db.add(azienda)
+        db.commit()
+        db.refresh(azienda)
 
-    # 4. Risposta per Twilio
+    # 2. Recupera o crea il contatto per l'azienda specifica
+    contatto = db.query(Contatto).filter(
+        Contatto.numero_whatsapp == numero_cliente,
+        Contatto.azienda_id == azienda.id
+    ).first()
+
+    if not contatto:
+        contatto = Contatto(numero_whatsapp=numero_cliente, azienda_id=azienda.id)
+        db.add(contatto)
+        db.commit()
+        db.refresh(contatto)
+
+    # 3. Salva il messaggio in arrivo nel DB
+    db.add(Messaggio(contatto_id=contatto.id, direzione="INBOUND", testo=messaggio_utente))
+    db.commit()
+
+    # 4. Genera la risposta usando Gemini e il contesto dell'azienda trovata
+    try:
+        risposta_ia = genera_risposta_gemini(azienda, contatto, messaggio_utente, db, SlotAgenda, Messaggio)
+    except Exception as e:
+        print(f"Errore genera_risposta_gemini: {e}")
+        risposta_ia = "Si è verificato un errore momentaneo nell'elaborazione della risposta."
+
+    # 5. Salva la risposta generata nel DB e invia a Twilio
+    db.add(Messaggio(contatto_id=contatto.id, direzione="OUTBOUND", testo=risposta_ia))
+    db.commit()
+
     resp = MessagingResponse()
-    resp.message(risposta_testo)
+    resp.message(risposta_ia)
     return Response(content=str(resp), media_type="application/xml")
     
 class EmailSchema(BaseModel):
