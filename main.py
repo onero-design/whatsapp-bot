@@ -1,18 +1,28 @@
 import os
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Form, Response, Depends, BackgroundTasks, HTTPException
+from fastapi import FastAPI, Form, Response, Depends, BackgroundTasks, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
 from mailer import send_email
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client as TwilioClient
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, Session
 from apscheduler.schedulers.background import BackgroundScheduler
+from passlib.context import CryptContext
+from jinja2 import Template
 
 from ai_service import genera_risposta_gemini, genera_bozza_email_b2b, trova_email_dominio_ia
 from dashboard import get_dashboard_routes
 from instagram import get_instagram_routes
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def genera_hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verifica_password(password_chiara: str, password_hash: str) -> bool:
+    return pwd_context.verify(password_chiara, password_hash)
 
 # --- CONFIGURAZIONE DATABASE ---
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -37,6 +47,7 @@ class Azienda(Base):
     
     contatti = relationship("Contatto", back_populates="azienda")
     slot = relationship("SlotAgenda", back_populates="azienda")
+    utenti = relationship("Utente", back_populates="azienda") 
 
 class Contatto(Base):
     __tablename__ = "contatti"
@@ -71,6 +82,16 @@ class SlotAgenda(Base):
     notifica_inviata = Column(Boolean, default=False)
     
     azienda = relationship("Azienda", back_populates="slot")
+
+class Utente(Base):
+    __tablename__ = "utenti"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    azienda_id = Column(Integer, ForeignKey("aziende.id"), nullable=False)
+
+    azienda = relationship("Azienda", back_populates="utenti")
 
 Base.metadata.create_all(bind=engine)
 
@@ -134,13 +155,48 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(invia_promemoria_automatici, 'interval', minutes=15)
 scheduler.start()
 
-@app.get("/", response_class=HTMLResponse)
-def home(db: Session = Depends(get_db)):
-    azienda = db.query(Azienda).first()
-    if azienda:
-        return f"<h2>Bot Attivo! <a href='/dashboard/{azienda.id}'>Accedi alla Dashboard</a></h2>"
-    return "<h2>Bot Attivo! Invia prima un messaggio per configurare l'azienda.</h2>"
+# --- ROTTE DI AUTENTICAZIONE (LOGIN / LOGOUT) ---
 
+@app.get("/login", response_class=HTMLResponse)
+async def pagina_login(request: Request):
+    with open("login.html", "r", encoding="utf-8") as f:
+        template = Template(f.read())
+    return HTMLResponse(content=template.render(request=request, errore=None))
+
+@app.post("/login")
+async def effettua_login(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    utente = db.query(Utente).filter(Utente.email == email).first()
+
+    if not utente or not verifica_password(password, utente.password_hash):
+        with open("login.html", "r", encoding="utf-8") as f:
+            template = Template(f.read())
+        return HTMLResponse(
+            content=template.render(request=request, errore="Email o password errati."),
+            status_code=401
+        )
+
+    response = RedirectResponse(url=f"/dashboard/{utente.azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
+    response.set_cookie(key="azienda_id", value=str(utente.azienda_id), httponly=True)
+    return response
+
+@app.get("/logout")
+async def logout():
+    response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(key="azienda_id")
+    return response
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request, db: Session = Depends(get_db)):
+    cookie_azienda = request.cookies.get("azienda_id")
+    if cookie_azienda:
+        return RedirectResponse(url=f"/dashboard/{cookie_azienda}", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    
 # --- WEBHOOK WHATSAPP (TWILIO) ---
 @app.post("/whatsapp-webhook")
 async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str = Form(...), db: Session = Depends(get_db)):
