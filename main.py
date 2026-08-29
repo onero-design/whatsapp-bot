@@ -288,3 +288,9 @@ class DomainSearchRequest(BaseModel):
 @app.post("/api/find-domain-emails")
 async def find_domain_emails_endpoint(data: DomainSearchRequest):
     return trova_email_dominio_ia(data.domain)
+
+
+@app.get("/aziende-list")
+def lista_aziende(db: Session = Depends(get_db)):
+    aziende = db.query(Azienda).all()
+    return [{"id": a.id, "nome": a.nome, "numero_whatsapp": a.numero_whatsapp_business} for a in aziende]
