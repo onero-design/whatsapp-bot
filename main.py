@@ -234,7 +234,8 @@ async def whatsapp_webhook(
         )
         risposta_testo = response_ai.choices[0].message.content
     except Exception as e:
-        risposta_testo = "Ci dispiace, si è verificato un errore momentaneo nei nostri sistemi."
+        print(f"ERRORE: {e}")
+        risposta_testo = f"Errore rilevato: {e}"
 
     # 4. Risposta per Twilio
     resp = MessagingResponse()
