@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Form, Depends
+from fastapi import APIRouter, Form, Depends, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from jinja2 import Template
@@ -16,7 +16,10 @@ HTML_TEMPLATE = """
 </head>
 <body class="bg-light">
     <div class="container py-5">
-        <h1 class="mb-4">Pannello di Controllo - {{ azienda.nome }}</h1>
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>Pannello di Controllo - {{ azienda.nome }}</h1>
+            <a href="/logout" class="btn btn-outline-danger">Esci (Logout)</a>
+        </div>
         
         <div class="row">
             <!-- ISTRUZIONI IA -->
@@ -150,7 +153,6 @@ HTML_TEMPLATE = """
         const btnGenera = document.getElementById("btnGenera");
         const targetDomainInput = document.getElementById("targetDomain");
 
-        // Estraiamo l'azienda_id dall'URL corrente (es. /dashboard/1)
         const urlParts = window.location.pathname.split("/");
         const aziendaId = urlParts[urlParts.length - 1];
 
@@ -187,7 +189,6 @@ HTML_TEMPLATE = """
                 document.getElementById("emailSubject").value = data.subject;
                 document.getElementById("emailBody").value = data.body;
             
-                // Se l'IA ha suggerito un dominio target pertinente, lo inseriamo
                 if(data.suggested_target_domain) {
                     targetDomainInput.value = data.suggested_target_domain;
                 }
@@ -222,7 +223,6 @@ HTML_TEMPLATE = """
 
         const domain = domainInput.value.trim();
 
-        // Se l'utente scrive un'email completa invece del solo dominio
         if(domain.includes("@") && domain.includes(".")) {
             destEmail.value = domain;
             emailSelectContainer.style.display = "none";
@@ -307,7 +307,12 @@ HTML_TEMPLATE = """
 
 def get_dashboard_routes(get_db_func, AziendaModel, SlotAgendaModel):
     @router.get("/{azienda_id}", response_class=HTMLResponse)
-    def show_dashboard(azienda_id: int, db: Session = Depends(get_db_func)):
+    def show_dashboard(request: Request, azienda_id: int, db: Session = Depends(get_db_func)):
+        # Controllo sicurezza Cookie di Sessione
+        cookie_azienda = request.cookies.get("azienda_id")
+        if not cookie_azienda or int(cookie_azienda) != azienda_id:
+            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
         azienda = db.query(AziendaModel).filter(AziendaModel.id == azienda_id).first()
         if not azienda:
             return HTMLResponse(content="Azienda non trovata", status_code=404)
@@ -321,20 +326,28 @@ def get_dashboard_routes(get_db_func, AziendaModel, SlotAgendaModel):
         return HTMLResponse(content=template.render(azienda=azienda, appuntamenti=appuntamenti))
 
     @router.post("/{azienda_id}/update-prompt")
-    def update_prompt(azienda_id: int, nome: str = Form(...), istruzioni_ia: str = Form(...), db: Session = Depends(get_db_func)):
+    def update_prompt(request: Request, azienda_id: int, nome: str = Form(...), istruzioni_ia: str = Form(...), db: Session = Depends(get_db_func)):
+        cookie_azienda = request.cookies.get("azienda_id")
+        if not cookie_azienda or int(cookie_azienda) != azienda_id:
+            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
         azienda = db.query(AziendaModel).filter(AziendaModel.id == azienda_id).first()
         if azienda:
             azienda.nome = nome
             azienda.istruzioni_ia = istruzioni_ia
             db.commit()
-        return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=303)
+        return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
 
     @router.post("/{azienda_id}/delete-slot/{slot_id}")
-    def delete_slot(azienda_id: int, slot_id: int, db: Session = Depends(get_db_func)):
+    def delete_slot(request: Request, azienda_id: int, slot_id: int, db: Session = Depends(get_db_func)):
+        cookie_azienda = request.cookies.get("azienda_id")
+        if not cookie_azienda or int(cookie_azienda) != azienda_id:
+            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
         slot = db.query(SlotAgendaModel).filter(SlotAgendaModel.id == slot_id, SlotAgendaModel.azienda_id == azienda_id).first()
         if slot:
             db.delete(slot)
             db.commit()
-        return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=303)
+        return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
 
     return router
