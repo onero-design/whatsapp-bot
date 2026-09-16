@@ -1,55 +1,19 @@
 import os
 import json
+import time
 from datetime import datetime
 from google import genai
 from google.genai import types
 from sqlalchemy.orm import Session
-import time
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# --- FUNZIONI STRUMENTI (TOOLS) ---
-def cerca_slot_disponibile(azienda_id: int, data_ora: str, db: Session, SlotAgenda) -> str:
-    slot = db.query(SlotAgenda).filter(
-        SlotAgenda.azienda_id == azienda_id,
-        SlotAgenda.data_ora == data_ora
-    ).first()
-    
-    if not slot or slot.stato == "Disponibile":
-        return f"Lo slot per il {data_ora} è DISPONIBILE."
-    return f"Lo slot per il {data_ora} è già OCCUPATO."
-
-def fissa_appuntamento(azienda_id: int, data_ora: str, servizio: str, nome_cliente: str, numero_cliente: str, db: Session, SlotAgenda) -> str:
-    slot = db.query(SlotAgenda).filter(
-        SlotAgenda.azienda_id == azienda_id,
-        SlotAgenda.data_ora == data_ora
-    ).first()
-    
-    if not slot:
-        slot = SlotAgenda(
-            azienda_id=azienda_id, 
-            data_ora=data_ora, 
-            stato="Occupato", 
-            cliente_nome=nome_cliente, 
-            numero_cliente=numero_cliente,
-            servizio=servizio
-        )
-        db.add(slot)
-    else:
-        slot.stato = "Occupato"
-        slot.cliente_nome = nome_cliente
-        slot.numero_cliente = numero_cliente
-        slot.servizio = servizio
-        
-    db.commit()
-    return f"Appuntamento confermato con successo per {nome_cliente} in data {data_ora} per il servizio {servizio}."
-
-# --- MOTORE DI RISPOSTA IA (WHATSAPP) CON RETRY AUTOMATICO ---
 def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session: Session, SlotAgenda, Messaggio) -> str:
     if not client:
-        return "Servizio IA non disponibile."
+        return "Servizio IA temporaneamente non disponibile."
 
+    # 1. Recupero dello storico
     storico = db_session.query(Messaggio).filter(
         Messaggio.contatto_id == contatto.id
     ).order_by(Messaggio.inviato_il.desc()).limit(6).all()
@@ -71,33 +35,66 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         "Assistente:"
     )
 
+    # 2. Definiamo i Tools usando ESCLUSIVAMENTE parametri stringa/int
     def verifica_disponibilita(data_ora: str) -> str:
-        """Verifica se uno slot è disponibile."""
-        return cerca_slot_disponibile(azienda.id, data_ora, db_session, SlotAgenda)
+        """Verifica se uno slot è disponibile. data_ora formato YYYY-MM-DD HH:MM."""
+        slot = db_session.query(SlotAgenda).filter(
+            SlotAgenda.azienda_id == azienda.id,
+            SlotAgenda.data_ora == data_ora
+        ).first()
+        if not slot or slot.stato == "Disponibile":
+            return f"Lo slot {data_ora} è DISPONIBILE."
+        return f"Lo slot {data_ora} è OCCUPATO."
 
     def prenota_appuntamento(data_ora: str, servizio: str, nome_cliente: str) -> str:
-        """Prenota un appuntamento salvando data_ora, servizio e nome cliente."""
-        return fissa_appuntamento(azienda.id, data_ora, servizio, nome_cliente, contatto.numero_whatsapp, db_session, SlotAgenda)
+        """Prenota un appuntamento inserendo data_ora, servizio e nome del cliente."""
+        slot = db_session.query(SlotAgenda).filter(
+            SlotAgenda.azienda_id == azienda.id,
+            SlotAgenda.data_ora == data_ora
+        ).first()
+        
+        if not slot:
+            slot = SlotAgenda(
+                azienda_id=azienda.id, 
+                data_ora=data_ora, 
+                stato="Occupato", 
+                cliente_nome=nome_cliente, 
+                numero_cliente=contatto.numero_whatsapp,
+                servizio=servizio
+            )
+            db_session.add(slot)
+        else:
+            slot.stato = "Occupato"
+            slot.cliente_nome = nome_cliente
+            slot.numero_cliente = contatto.numero_whatsapp
+            slot.servizio = servizio
+            
+        db_session.commit()
+        return f"Confermato per {nome_cliente} il {data_ora} per {servizio}."
 
     tools_list = [verifica_disponibilita, prenota_appuntamento]
 
-    # Gestione tentativi per picchi di traffico (Errore 503)
+    # 3. Chiamata con Retry Automatico per gestire 503 e sovraccarichi
     max_retries = 3
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
-                model="gemini-3.6-flash",
+                model="gemini-2.5-flash",  # Usiamo il modello stabile per messaggistica
                 contents=prompt,
                 config=types.GenerateContentConfig(tools=tools_list)
             )
-            return response.text.strip()
+            if response.text:
+                return response.text.strip()
+            return "Ricevuto! Come posso aiutarti ulteriormente?"
         except Exception as e:
-            err_msg = str(e)
-            if ("503" in err_msg or "UNAVAILABLE" in err_msg) and attempt < max_retries - 1:
-                time.sleep(2)  # Attendi 2 secondi prima del nuovo tentativo
+            err_str = str(e)
+            print(f"Errore Gemini (Tentativo {attempt + 1}): {err_str}")
+            if ("503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str) and attempt < max_retries - 1:
+                time.sleep(2)
                 continue
-            print(f"Errore Gemini WhatsApp (Tentativo {attempt + 1}): {e}")
-            return "Grazie per il messaggio! Un operatore ti risponderà a breve."
+            break
+
+    return "Ho preso nota della tua richiesta. Un nostro operatore ti risponderà a brevissimo!"
 
 # --- GENERATORE DI BOZZE EMAIL B2B ---
 def genera_bozza_email_b2b(azienda, target_info: str, offerta_azienda: str) -> dict:
