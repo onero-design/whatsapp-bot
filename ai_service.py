@@ -37,9 +37,23 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         "Assistente:"
     )
 
+    # --- HELPER PARSING FORMATI DATE ISO / SPAZIO ---
+    def normalizza_data_iso(data_ora_str: str) -> str:
+        clean = data_ora_str.strip().replace("Z", "")
+        if "T" not in clean and " " in clean:
+            clean = clean.replace(" ", "T")
+        parts = clean.split("T")
+        if len(parts) == 2:
+            time_part = parts[1]
+            if time_part.count(":") == 1:
+                clean = f"{parts[0]}T{time_part}:00"
+        return clean
+
     # --- TOOLS DI VERIFICA E PRENOTAZIONE CALENDAR ---
     def controlla_orario_disponibile(data_ora_iso: str) -> str:
         """Verifica se uno slot è libero sul Google Calendar. Formato data_ora_iso: YYYY-MM-DDTHH:MM:SS."""
+        data_ora_iso = normalizza_data_iso(data_ora_iso)
+        
         # Se l'azienda ha le chiavi Google configurate usa quelle, altrimenti fall-back sul DB locale
         if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
             service = get_calendar_service(
@@ -57,14 +71,17 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         # Fallback su DB locale se Google Calendar non è ancora collegato
         slot = db_session.query(SlotAgenda).filter(
             SlotAgenda.azienda_id == azienda.id,
-            SlotAgenda.data_ora == data_ora_iso
+            SlotAgenda.data_ora.in_([data_ora_iso, data_ora_iso.replace("T", " "), data_ora_iso[:16]])
         ).first()
+
         if not slot or slot.stato == "Disponibile":
             return f"ORARIO LIBERO: L'orario {data_ora_iso} è disponibile."
         return f"ORARIO OCCUPATO: L'orario {data_ora_iso} è già occupato."
 
     def conferma_e_prenota_appuntamento(data_ora_iso: str, servizio: str, nome_cliente: str) -> str:
         """Prenota l'appuntamento sia su Google Calendar che sul DB locale."""
+        data_ora_iso = normalizza_data_iso(data_ora_iso)
+
         # 1. Scrittura su Google Calendar
         if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
             service = get_calendar_service(
@@ -85,7 +102,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         # 2. Salvataggio su DB locale per memoria interna
         slot = db_session.query(SlotAgenda).filter(
             SlotAgenda.azienda_id == azienda.id,
-            SlotAgenda.data_ora == data_ora_iso
+            SlotAgenda.data_ora.in_([data_ora_iso, data_ora_iso.replace("T", " "), data_ora_iso[:16]])
         ).first()
         
         if not slot:
@@ -136,7 +153,6 @@ def genera_bozza_email_b2b(azienda, target_info: str, offerta_azienda: str) -> d
     if not client:
         return {"success": False, "error": "Servizio IA non disponibile."}
 
-    # Estraiamo le istruzioni/catalogo salvate per l'azienda
     istruzioni_azienda = getattr(azienda, 'istruzioni_ia', '') if azienda else ''
     nome_azienda = getattr(azienda, 'nome', 'Nostra Azienda') if azienda else 'Nostra Azienda'
 
@@ -192,7 +208,6 @@ def trova_email_dominio_ia(domain: str) -> dict:
 
     input_clean = domain.strip().lower()
 
-    # Se l'utente inserisce direttamente un'email valida completa
     if "@" in input_clean and "." in input_clean.split("@")[-1]:
         return {
             "success": True,
@@ -202,7 +217,6 @@ def trova_email_dominio_ia(domain: str) -> dict:
 
     clean_domain = input_clean.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0].strip()
 
-    # Blocco domini gratuiti/generici: un venditore non deve contattare info@gmail.com
     if clean_domain in FORBIDDEN_DOMAINS:
         return {
             "success": False,
