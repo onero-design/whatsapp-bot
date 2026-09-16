@@ -45,46 +45,6 @@ HTML_TEMPLATE = """
             </div>
 
             <div class="col-md-7">
-                <!-- APPUNTAMENTI PRENOTATI -->
-                <div class="card shadow-sm mb-4">
-                    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
-                        <h5 class="card-title mb-0">Appuntamenti Prenotati</h5>
-                        <span class="badge bg-success">{{ appuntamenti|length }} Prenotazioni</span>
-                    </div>
-                    <div class="card-body">
-                        {% if appuntamenti %}
-                        <div class="table-responsive">
-                            <table class="table table-hover">
-                                <thead>
-                                    <tr>
-                                        <th>Data e Ora</th>
-                                        <th>Cliente</th>
-                                        <th>Servizio</th>
-                                        <th>Azione</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for slot in appuntamenti %}
-                                    <tr>
-                                        <td><strong>{{ slot.data_ora.split(' ')[0].split('-')[2] }}/{{ slot.data_ora.split(' ')[0].split('-')[1] }}/{{ slot.data_ora.split(' ')[0].split('-')[0] }} {{ slot.data_ora.split(' ')[1] }}</strong></td>
-                                        <td>{{ slot.cliente_nome or 'N/D' }}</td>
-                                        <td><span class="badge bg-info text-dark">{{ slot.servizio or 'Generale' }}</span></td>
-                                        <td>
-                                            <form action="/dashboard/{{ azienda.id }}/delete-slot/{{ slot.id }}" method="post" style="display:inline;">
-                                                <button type="submit" class="btn btn-sm btn-outline-danger">Cancella</button>
-                                            </form>
-                                        </td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                        </div>
-                        {% else %}
-                        <p class="text-muted text-center py-4">Nessun appuntamento registrato al momento.</p>
-                        {% endif %}
-                    </div>
-                </div>
-
                 <!-- EMAIL MARKETING B2B AUTOMATICO SU DOMINIO -->
                 <div class="card shadow-sm">
                     <div class="card-header bg-warning text-dark">
@@ -305,10 +265,9 @@ HTML_TEMPLATE = """
 </html>
 """
 
-def get_dashboard_routes(get_db_func, AziendaModel, SlotAgendaModel):
+def get_dashboard_routes(get_db_func, AziendaModel):
     @router.get("/{azienda_id}", response_class=HTMLResponse)
     def show_dashboard(request: Request, azienda_id: int, db: Session = Depends(get_db_func)):
-        # Controllo sicurezza Cookie di Sessione
         cookie_azienda = request.cookies.get("azienda_id")
         if not cookie_azienda or int(cookie_azienda) != azienda_id:
             return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
@@ -317,13 +276,8 @@ def get_dashboard_routes(get_db_func, AziendaModel, SlotAgendaModel):
         if not azienda:
             return HTMLResponse(content="Azienda non trovata", status_code=404)
 
-        appuntamenti = db.query(SlotAgendaModel).filter(
-            SlotAgendaModel.azienda_id == azienda_id,
-            SlotAgendaModel.stato == "Occupato"
-        ).all()
-
         template = Template(HTML_TEMPLATE)
-        return HTMLResponse(content=template.render(azienda=azienda, appuntamenti=appuntamenti))
+        return HTMLResponse(content=template.render(azienda=azienda))
 
     @router.post("/{azienda_id}/update-prompt")
     def update_prompt(request: Request, azienda_id: int, nome: str = Form(...), istruzioni_ia: str = Form(...), db: Session = Depends(get_db_func)):
@@ -335,18 +289,6 @@ def get_dashboard_routes(get_db_func, AziendaModel, SlotAgendaModel):
         if azienda:
             azienda.nome = nome
             azienda.istruzioni_ia = istruzioni_ia
-            db.commit()
-        return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
-
-    @router.post("/{azienda_id}/delete-slot/{slot_id}")
-    def delete_slot(request: Request, azienda_id: int, slot_id: int, db: Session = Depends(get_db_func)):
-        cookie_azienda = request.cookies.get("azienda_id")
-        if not cookie_azienda or int(cookie_azienda) != azienda_id:
-            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-
-        slot = db.query(SlotAgendaModel).filter(SlotAgendaModel.id == slot_id, SlotAgendaModel.azienda_id == azienda_id).first()
-        if slot:
-            db.delete(slot)
             db.commit()
         return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
 
