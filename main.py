@@ -7,7 +7,7 @@ from mailer import send_email
 from fastapi.responses import HTMLResponse, RedirectResponse
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client as TwilioClient
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text, Boolean, text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, Session
 from apscheduler.schedulers.background import BackgroundScheduler
 from passlib.context import CryptContext
@@ -102,12 +102,17 @@ class Utente(Base):
     azienda_id = Column(Integer, ForeignKey("aziende.id"), nullable=False)
 
     azienda = relationship("Azienda", back_populates="utenti")
-# Allineamento automatico colonne Google Calendar nel DB
-with engine.connect() as conn:
-    conn.execute("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_access_token TEXT;")
-    conn.execute("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;")
-    conn.execute("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_calendar_id VARCHAR DEFAULT 'primary';")
-    conn.commit()
+
+# Allineamento automatico colonne Google Calendar nel DB (Compatibile con SQLAlchemy 2.0)
+try:
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_access_token TEXT;"))
+        conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;"))
+        conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_calendar_id VARCHAR DEFAULT 'primary';"))
+        conn.commit()
+except Exception as e:
+    print(f"Errore durante la migrazione del DB: {e}")
+
 Base.metadata.create_all(bind=engine)
 
 def get_db():
