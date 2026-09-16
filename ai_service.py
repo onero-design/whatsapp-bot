@@ -79,7 +79,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
-                model="gemini-2.5-flash",  # Usiamo il modello stabile per messaggistica
+                model="gemini-3.6-flash",  # Usiamo il modello stabile per messaggistica
                 contents=prompt,
                 config=types.GenerateContentConfig(tools=tools_list)
             )
