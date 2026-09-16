@@ -9,11 +9,13 @@ from sqlalchemy.orm import Session
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
+from calendar_service import get_calendar_service, verifica_disponibilita_calendar, inserisci_evento_calendar
+
 def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session: Session, SlotAgenda, Messaggio) -> str:
     if not client:
         return "Servizio IA temporaneamente non disponibile."
 
-    # 1. Recupero dello storico
+    # 1. Recupero dello storico messaggi
     storico = db_session.query(Messaggio).filter(
         Messaggio.contatto_id == contatto.id
     ).order_by(Messaggio.inviato_il.desc()).limit(6).all()
@@ -35,28 +37,61 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         "Assistente:"
     )
 
-    # 2. Definiamo i Tools usando ESCLUSIVAMENTE parametri stringa/int
-    def verifica_disponibilita(data_ora: str) -> str:
-        """Verifica se uno slot è disponibile. data_ora formato YYYY-MM-DD HH:MM."""
+    # --- TOOLS DI VERIFICA E PRENOTAZIONE CALENDAR ---
+    def controlla_orario_disponibile(data_ora_iso: str) -> str:
+        """Verifica se uno slot è libero sul Google Calendar. Formato data_ora_iso: YYYY-MM-DDTHH:MM:SS."""
+        # Se l'azienda ha le chiavi Google configurate usa quelle, altrimenti fall-back sul DB locale
+        if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
+            service = get_calendar_service(
+                azienda.google_access_token,
+                azienda.google_refresh_token,
+                os.getenv("GOOGLE_CLIENT_ID"),
+                os.getenv("GOOGLE_CLIENT_SECRET")
+            )
+            cal_id = getattr(azienda, 'google_calendar_id', 'primary') or 'primary'
+            is_free = verifica_disponibilita_calendar(service, cal_id, data_ora_iso)
+            if is_free:
+                return f"ORARIO LIBERO: L'orario {data_ora_iso} è disponibile su Google Calendar."
+            return f"ORARIO OCCUPATO: L'orario {data_ora_iso} è già occupato. Proponi un altro orario."
+        
+        # Fallback su DB locale se Google Calendar non è ancora collegato
         slot = db_session.query(SlotAgenda).filter(
             SlotAgenda.azienda_id == azienda.id,
-            SlotAgenda.data_ora == data_ora
+            SlotAgenda.data_ora == data_ora_iso
         ).first()
         if not slot or slot.stato == "Disponibile":
-            return f"Lo slot {data_ora} è DISPONIBILE."
-        return f"Lo slot {data_ora} è OCCUPATO."
+            return f"ORARIO LIBERO: L'orario {data_ora_iso} è disponibile."
+        return f"ORARIO OCCUPATO: L'orario {data_ora_iso} è già occupato."
 
-    def prenota_appuntamento(data_ora: str, servizio: str, nome_cliente: str) -> str:
-        """Prenota un appuntamento inserendo data_ora, servizio e nome del cliente."""
+    def conferma_e_prenota_appuntamento(data_ora_iso: str, servizio: str, nome_cliente: str) -> str:
+        """Prenota l'appuntamento sia su Google Calendar che sul DB locale."""
+        # 1. Scrittura su Google Calendar
+        if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
+            service = get_calendar_service(
+                azienda.google_access_token,
+                azienda.google_refresh_token,
+                os.getenv("GOOGLE_CLIENT_ID"),
+                os.getenv("GOOGLE_CLIENT_SECRET")
+            )
+            cal_id = getattr(azienda, 'google_calendar_id', 'primary') or 'primary'
+            inserisci_evento_calendar(
+                service, 
+                cal_id, 
+                f"{servizio} - {nome_cliente}", 
+                f"Prenotato via WhatsApp: {contatto.numero_whatsapp}", 
+                data_ora_iso
+            )
+
+        # 2. Salvataggio su DB locale per memoria interna
         slot = db_session.query(SlotAgenda).filter(
             SlotAgenda.azienda_id == azienda.id,
-            SlotAgenda.data_ora == data_ora
+            SlotAgenda.data_ora == data_ora_iso
         ).first()
         
         if not slot:
             slot = SlotAgenda(
                 azienda_id=azienda.id, 
-                data_ora=data_ora, 
+                data_ora=data_ora_iso, 
                 stato="Occupato", 
                 cliente_nome=nome_cliente, 
                 numero_cliente=contatto.numero_whatsapp,
@@ -70,26 +105,26 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
             slot.servizio = servizio
             
         db_session.commit()
-        return f"Confermato per {nome_cliente} il {data_ora} per {servizio}."
+        return f"CONFERMATO: Appuntamento registrato per {nome_cliente} in data {data_ora_iso} per {servizio}."
 
-    tools_list = [verifica_disponibilita, prenota_appuntamento]
+    tools_list = [controlla_orario_disponibile, conferma_e_prenota_appuntamento]
 
-    # 3. Chiamata con Retry Automatico per gestire 503 e sovraccarichi
+    # 3. Chiamata a Gemini 3.6 Flash
     max_retries = 3
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
-                model="gemini-3.6-flash",  # Usiamo il modello stabile per messaggistica
+                model="gemini-3.6-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(tools=tools_list)
             )
             if response.text:
                 return response.text.strip()
-            return "Ricevuto! Come posso aiutarti ulteriormente?"
+            return "Ricevuto! Come posso aiutarti?"
         except Exception as e:
             err_str = str(e)
             print(f"Errore Gemini (Tentativo {attempt + 1}): {err_str}")
-            if ("503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str) and attempt < max_retries - 1:
+            if ("503" in err_str or "UNAVAILABLE" in err_str) and attempt < max_retries - 1:
                 time.sleep(2)
                 continue
             break
