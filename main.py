@@ -102,7 +102,12 @@ class Utente(Base):
     azienda_id = Column(Integer, ForeignKey("aziende.id"), nullable=False)
 
     azienda = relationship("Azienda", back_populates="utenti")
-
+# Allineamento automatico colonne Google Calendar nel DB
+with engine.connect() as conn:
+    conn.execute("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_access_token TEXT;")
+    conn.execute("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;")
+    conn.execute("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_calendar_id VARCHAR DEFAULT 'primary';")
+    conn.commit()
 Base.metadata.create_all(bind=engine)
 
 def get_db():
