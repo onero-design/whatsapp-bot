@@ -103,7 +103,7 @@ class Utente(Base):
 
     azienda = relationship("Azienda", back_populates="utenti")
 
-# Allineamento automatico colonne Google Calendar nel DB (Compatibile con SQLAlchemy 2.0)
+# Allineamento automatico colonne Google Calendar nel DB
 try:
     with engine.connect() as conn:
         conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_access_token TEXT;"))
@@ -167,7 +167,7 @@ def invia_promemoria_automatici():
 app = FastAPI()
 
 # Collega i moduli di Dashboard e Instagram
-app.include_router(get_dashboard_routes(get_db, Azienda, SlotAgenda))
+app.include_router(get_dashboard_routes(get_db, Azienda))
 app.include_router(get_instagram_routes(get_db, Azienda, Contatto, Messaggio, SlotAgenda))
 
 # Schedulatore promemoria
