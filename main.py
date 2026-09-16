@@ -314,3 +314,7 @@ def imposta_numero_sandbox(azienda_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     return {"status": "successo", "messaggio": f"Il numero WhatsApp di test ora risponde per: {target.nome}"}
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
