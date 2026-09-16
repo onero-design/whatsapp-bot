@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from google import genai
 from google.genai import types
 from sqlalchemy.orm import Session
@@ -29,9 +29,14 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
     ora_attuale = datetime.now()
 
     prompt = (
-        f"Data e Ora attuale: {ora_attuale.strftime('%d/%m/%Y alle %H:%M')}.\n"
+        f"Data e Ora attuale del sistema: {ora_attuale.strftime('%d/%m/%Y alle %H:%M')} (Anno: {ora_attuale.year}).\n"
         f"Sei l'assistente virtuale di {azienda.nome}.\n"
         f"ISTRUZIONI AZIENDALI:\n{azienda.istruzioni_ia}\n\n"
+        f"REGOLE FONDAMENTALI PRENOTAZIONE:\n"
+        f"1. PRIMA di confermare o registrare qualsiasi appuntamento, DEVI TASSATIVAMENTE chiamare la funzione `controlla_orario_disponibile(data_ora_iso)`.\n"
+        f"2. Se `controlla_orario_disponibile` risponde che l'orario è OCCUPATO, NON PRENOTARE! Riferisci al cliente che l'orario non è disponibile e chiedigli di scegliere un altro orario.\n"
+        f"3. Solo se l'orario risulta LIBERO, chiama `conferma_e_prenota_appuntamento` per registrarlo.\n"
+        f"4. Il formato della data e ora per i tool deve essere ISO standard: YYYY-MM-DDTHH:MM:SS (es. 2026-09-17T18:00:00).\n\n"
         f"CRONOLOGIA CHAT:\n{conversazione}"
         f"Cliente: {messaggio_attuale}\n"
         "Assistente:"
@@ -39,7 +44,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
 
     # --- HELPER PARSING FORMATI DATE ISO / SPAZIO ---
     def normalizza_data_iso(data_ora_str: str) -> str:
-        clean = data_ora_str.strip().replace("Z", "")
+        clean = str(data_ora_str).strip().replace("Z", "")
         if "T" not in clean and " " in clean:
             clean = clean.replace(" ", "T")
         parts = clean.split("T")
@@ -51,32 +56,36 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
 
     # --- TOOLS DI VERIFICA E PRENOTAZIONE CALENDAR ---
     def controlla_orario_disponibile(data_ora_iso: str) -> str:
-        """Verifica se uno slot è libero sul Google Calendar. Formato data_ora_iso: YYYY-MM-DDTHH:MM:SS."""
+        """Verifica se uno slot è libero sul Google Calendar e nel DB locale. Formato data_ora_iso: YYYY-MM-DDTHH:MM:SS."""
         data_ora_iso = normalizza_data_iso(data_ora_iso)
         
-        # Se l'azienda ha le chiavi Google configurate usa quelle, altrimenti fall-back sul DB locale
-        if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
-            service = get_calendar_service(
-                azienda.google_access_token,
-                azienda.google_refresh_token,
-                os.getenv("GOOGLE_CLIENT_ID"),
-                os.getenv("GOOGLE_CLIENT_SECRET")
-            )
-            cal_id = getattr(azienda, 'google_calendar_id', 'primary') or 'primary'
-            is_free = verifica_disponibilita_calendar(service, cal_id, data_ora_iso)
-            if is_free:
-                return f"ORARIO LIBERO: L'orario {data_ora_iso} è disponibile su Google Calendar."
-            return f"ORARIO OCCUPATO: L'orario {data_ora_iso} è già occupato. Proponi un altro orario."
-        
-        # Fallback su DB locale se Google Calendar non è ancora collegato
-        slot = db_session.query(SlotAgenda).filter(
+        # 1. Controllo primario su DB locale
+        slot_occupato = db_session.query(SlotAgenda).filter(
             SlotAgenda.azienda_id == azienda.id,
+            SlotAgenda.stato == "Occupato",
             SlotAgenda.data_ora.in_([data_ora_iso, data_ora_iso.replace("T", " "), data_ora_iso[:16]])
         ).first()
 
-        if not slot or slot.stato == "Disponibile":
-            return f"ORARIO LIBERO: L'orario {data_ora_iso} è disponibile."
-        return f"ORARIO OCCUPATO: L'orario {data_ora_iso} è già occupato."
+        if slot_occupato:
+            return f"ORARIO OCCUPATO: L'orario {data_ora_iso} è già stato prenotato da un altro cliente nel sistema. Scegli o proponi un orario diverso."
+
+        # 2. Controllo su Google Calendar se collegato
+        if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
+            try:
+                service = get_calendar_service(
+                    azienda.google_access_token,
+                    azienda.google_refresh_token,
+                    os.getenv("GOOGLE_CLIENT_ID"),
+                    os.getenv("GOOGLE_CLIENT_SECRET")
+                )
+                cal_id = getattr(azienda, 'google_calendar_id', 'primary') or 'primary'
+                is_free = verifica_disponibilita_calendar(service, cal_id, data_ora_iso)
+                if not is_free:
+                    return f"ORARIO OCCUPATO: L'orario {data_ora_iso} è occupato su Google Calendar. Proponi un altro orario."
+            except Exception as e:
+                print(f"Errore verifica Google Calendar: {e}")
+
+        return f"ORARIO LIBERO: L'orario {data_ora_iso} è completamente disponibile. Puoi procedere alla prenotazione."
 
     def conferma_e_prenota_appuntamento(data_ora_iso: str, servizio: str, nome_cliente: str) -> str:
         """Prenota l'appuntamento sia su Google Calendar che sul DB locale."""
@@ -84,20 +93,23 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
 
         # 1. Scrittura su Google Calendar
         if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
-            service = get_calendar_service(
-                azienda.google_access_token,
-                azienda.google_refresh_token,
-                os.getenv("GOOGLE_CLIENT_ID"),
-                os.getenv("GOOGLE_CLIENT_SECRET")
-            )
-            cal_id = getattr(azienda, 'google_calendar_id', 'primary') or 'primary'
-            inserisci_evento_calendar(
-                service, 
-                cal_id, 
-                f"{servizio} - {nome_cliente}", 
-                f"Prenotato via WhatsApp: {contatto.numero_whatsapp}", 
-                data_ora_iso
-            )
+            try:
+                service = get_calendar_service(
+                    azienda.google_access_token,
+                    azienda.google_refresh_token,
+                    os.getenv("GOOGLE_CLIENT_ID"),
+                    os.getenv("GOOGLE_CLIENT_SECRET")
+                )
+                cal_id = getattr(azienda, 'google_calendar_id', 'primary') or 'primary'
+                inserisci_evento_calendar(
+                    service, 
+                    cal_id, 
+                    f"{servizio} - {nome_cliente}", 
+                    f"Prenotato via WhatsApp: {contatto.numero_whatsapp}", 
+                    data_ora_iso
+                )
+            except Exception as e:
+                print(f"Errore inserimento Google Calendar: {e}")
 
         # 2. Salvataggio su DB locale per memoria interna
         slot = db_session.query(SlotAgenda).filter(
