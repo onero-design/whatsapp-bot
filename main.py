@@ -1,4 +1,5 @@
 import os
+import requests
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Form, Response, Depends, BackgroundTasks, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
@@ -24,10 +25,14 @@ def genera_hash_password(password: str) -> str:
 def verifica_password(password_chiara: str, password_hash: str) -> bool:
     return pwd_context.verify(password_chiara, password_hash)
 
-# --- CONFIGURAZIONE DATABASE ---
+# --- CONFIGURAZIONE DATABASE & VARIABILI D'AMBIENTE ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
 
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -44,6 +49,11 @@ class Azienda(Base):
     numero_whatsapp_business = Column(String, unique=True, index=True)
     istruzioni_ia = Column(Text, nullable=False)
     creato_il = Column(DateTime, default=datetime.utcnow)
+    
+    # Campi integrati per Google Calendar OAuth2
+    google_access_token = Column(Text, nullable=True)
+    google_refresh_token = Column(Text, nullable=True)
+    google_calendar_id = Column(String, nullable=True, default="primary")
     
     contatti = relationship("Contatto", back_populates="azienda")
     slot = relationship("SlotAgenda", back_populates="azienda")
@@ -155,6 +165,58 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(invia_promemoria_automatici, 'interval', minutes=15)
 scheduler.start()
 
+# --- ROTTE OAUTH2 GOOGLE CALENDAR ---
+
+@app.get("/auth/google/login")
+def google_login(azienda_id: int):
+    """Avvia il flusso OAuth2 per collegare Google Calendar."""
+    if not GOOGLE_CLIENT_ID or not GOOGLE_REDIRECT_URI:
+        raise HTTPException(status_code=500, detail="Credenziali GOOGLE_CLIENT_ID o GOOGLE_REDIRECT_URI non configurate su Render.")
+        
+    google_auth_url = (
+        "https://accounts.google.com/o/oauth2/v2/auth?"
+        f"client_id={GOOGLE_CLIENT_ID}&"
+        f"redirect_uri={GOOGLE_REDIRECT_URI}&"
+        "response_type=code&"
+        "scope=https://www.googleapis.com/auth/calendar.events&"
+        "access_type=offline&"
+        "prompt=consent&"
+        f"state={azienda_id}"
+    )
+    return RedirectResponse(google_auth_url)
+
+@app.get("/auth/google/callback")
+def google_callback(code: str, state: str, db: Session = Depends(get_db)):
+    """Riceve il codice di autorizzazione da Google e salva i token nel DB."""
+    azienda_id = int(state)
+    
+    token_url = "https://oauth2.googleapis.com/token"
+    payload = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "code": code,
+        "grant_type": "authorization_code",
+        "redirect_uri": GOOGLE_REDIRECT_URI,
+    }
+    
+    response = requests.post(token_url, data=payload)
+    res_data = response.json()
+    
+    if "error" in res_data:
+        raise HTTPException(status_code=400, detail=f"Errore Google OAuth: {res_data.get('error_description')}")
+
+    access_token = res_data.get("access_token")
+    refresh_token = res_data.get("refresh_token")
+
+    azienda = db.query(Azienda).filter(Azienda.id == azienda_id).first()
+    if azienda:
+        azienda.google_access_token = access_token
+        if refresh_token:
+            azienda.google_refresh_token = refresh_token
+        db.commit()
+
+    return {"status": "success", "message": f"Google Calendar collegato con successo per l'azienda ID: {azienda_id}!"}
+
 # --- ROTTE DI AUTENTICAZIONE (LOGIN / LOGOUT) ---
 
 @app.get("/login", response_class=HTMLResponse)
@@ -204,10 +266,8 @@ async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str
     numero_business = To
     messaggio_utente = Body.strip()
 
-    # 1. Recupera l'azienda associata al numero WhatsApp che riceve il messaggio
     azienda = db.query(Azienda).filter(Azienda.numero_whatsapp_business == numero_business).first()
     
-    # Se il numero non è ancora associato a nessuna azienda, crea una configurazione fallback
     if not azienda:
         istruzioni_default = (
             "Sei l'assistente della Pasticceria.\n"
@@ -224,7 +284,6 @@ async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str
         db.commit()
         db.refresh(azienda)
 
-    # 2. Recupera o crea il contatto per l'azienda specifica
     contatto = db.query(Contatto).filter(
         Contatto.numero_whatsapp == numero_cliente,
         Contatto.azienda_id == azienda.id
@@ -236,18 +295,15 @@ async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str
         db.commit()
         db.refresh(contatto)
 
-    # 3. Salva il messaggio in arrivo nel DB
     db.add(Messaggio(contatto_id=contatto.id, direzione="INBOUND", testo=messaggio_utente))
     db.commit()
 
-    # 4. Genera la risposta usando Gemini e il contesto dell'azienda trovata
     try:
         risposta_ia = genera_risposta_gemini(azienda, contatto, messaggio_utente, db, SlotAgenda, Messaggio)
     except Exception as e:
         print(f"Errore genera_risposta_gemini: {e}")
         risposta_ia = "Si è verificato un errore momentaneo nell'elaborazione della risposta."
 
-    # 5. Salva la risposta generata nel DB e invia a Twilio
     db.add(Messaggio(contatto_id=contatto.id, direzione="OUTBOUND", testo=risposta_ia))
     db.commit()
 
@@ -289,7 +345,6 @@ class DomainSearchRequest(BaseModel):
 async def find_domain_emails_endpoint(data: DomainSearchRequest):
     return trova_email_dominio_ia(data.domain)
 
-
 @app.get("/aziende-list")
 def lista_aziende(db: Session = Depends(get_db)):
     aziende = db.query(Azienda).all()
@@ -299,13 +354,11 @@ def lista_aziende(db: Session = Depends(get_db)):
 def imposta_numero_sandbox(azienda_id: int, db: Session = Depends(get_db)):
     num_sandbox = "whatsapp:+14155238886"
     
-    # 1. Libera il numero di test da chiunque lo stia usando
     vecchia = db.query(Azienda).filter(Azienda.numero_whatsapp_business == num_sandbox).first()
     if vecchia:
         vecchia.numero_whatsapp_business = f"whatsapp:+39000000000{vecchia.id}"
         db.commit()
 
-    # 2. Assegna il numero di test all'azienda scelta
     target = db.query(Azienda).filter(Azienda.id == azienda_id).first()
     if not target:
         return {"status": "errore", "messaggio": "Azienda non trovata"}
