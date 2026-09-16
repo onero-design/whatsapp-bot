@@ -122,6 +122,20 @@ def get_db():
     finally:
         db.close()
 
+# --- HELPER PARSING DATA FLOTTANTE ---
+def parse_date_string(date_str: str) -> datetime:
+    clean_str = str(date_str).strip().replace("Z", "")
+    try:
+        return datetime.fromisoformat(clean_str)
+    except ValueError:
+        formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"]
+        for fmt in formats:
+            try:
+                return datetime.strptime(clean_str, fmt)
+            except ValueError:
+                continue
+        raise ValueError(f"Impossibile formattare la data: {date_str}")
+
 # --- PROMEMORIA AUTOMATICI ---
 def invia_promemoria_automatici():
     if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
@@ -141,7 +155,7 @@ def invia_promemoria_automatici():
 
         for slot in appuntamenti_da_notificare:
             try:
-                data_appuntamento = datetime.strptime(slot.data_ora, "%Y-%m-%d %H:%M")
+                data_appuntamento = parse_date_string(slot.data_ora)
                 if ora_corrente < data_appuntamento <= prossima_finestra and slot.numero_cliente:
                     azienda = db.query(Azienda).filter(Azienda.id == slot.azienda_id).first()
                     
