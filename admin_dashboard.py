@@ -132,7 +132,7 @@ def get_admin_routes(get_db, Azienda, Utente, genera_hash_password):
 
     return router
 
-@router.get("/admin/login-as/{azienda_id}")
+    @router.get("/admin/login-as/{azienda_id}")
     def login_come_cliente(azienda_id: int, request: Request, db: Session = Depends(get_db)):
         # Trova l'azienda
         azienda = db.query(Azienda).filter(Azienda.id == azienda_id).first()
