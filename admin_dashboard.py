@@ -130,8 +130,6 @@ def get_admin_routes(get_db, Azienda, Utente, genera_hash_password):
             db.commit()
         return RedirectResponse(url="/admin/super-dashboard", status_code=status.HTTP_303_SEE_OTHER)
 
-    return router
-
     @router.get("/admin/login-as/{azienda_id}")
     def login_come_cliente(azienda_id: int, request: Request, db: Session = Depends(get_db)):
         # Trova l'azienda
@@ -143,3 +141,5 @@ def get_admin_routes(get_db, Azienda, Utente, genera_hash_password):
         response = RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
         response.set_cookie(key="azienda_id", value=str(azienda_id), httponly=True)
         return response
+
+    return router
