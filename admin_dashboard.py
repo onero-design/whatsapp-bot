@@ -78,7 +78,7 @@ def get_admin_routes(get_db, Azienda, Utente, genera_hash_password):
                                     {% endif %}
                                 </form>
                                 {% if u.azienda_id %}
-                                    <a href="/dashboard/{{ u.azienda_id }}" class="btn btn-outline-primary btn-sm">Entra come Cliente</a>
+                                    <a href="/admin/login-as/{{ u.azienda_id }}" class="btn btn-outline-primary btn-sm">Entra come Cliente</a>
                                 {% endif %}
                             </td>
                         </tr>
@@ -131,3 +131,15 @@ def get_admin_routes(get_db, Azienda, Utente, genera_hash_password):
         return RedirectResponse(url="/admin/super-dashboard", status_code=status.HTTP_303_SEE_OTHER)
 
     return router
+
+@router.get("/admin/login-as/{azienda_id}")
+    def login_come_cliente(azienda_id: int, request: Request, db: Session = Depends(get_db)):
+        # Trova l'azienda
+        azienda = db.query(Azienda).filter(Azienda.id == azienda_id).first()
+        if not azienda:
+            return RedirectResponse(url="/admin/super-dashboard", status_code=status.HTTP_303_SEE_OTHER)
+
+        # Imposta il cookie per entrare nella dashboard dell'azienda selezionata
+        response = RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
+        response.set_cookie(key="azienda_id", value=str(azienda_id), httponly=True)
+        return response
