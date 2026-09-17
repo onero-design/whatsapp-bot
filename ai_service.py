@@ -15,7 +15,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
     if not client:
         return "Servizio IA temporaneamente non disponibile."
 
-    # 1. Recupero dello storico messaggi
+    # Storico messaggi
     storico = db_session.query(Messaggio).filter(
         Messaggio.contatto_id == contatto.id
     ).order_by(Messaggio.inviato_il.desc()).limit(6).all()
@@ -30,19 +30,20 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
 
     prompt = (
         f"Data e Ora attuale del sistema: {ora_attuale.strftime('%d/%m/%Y alle %H:%M')} (Anno: {ora_attuale.year}).\n"
-        f"Sei l'assistente virtuale di {azienda.nome}.\n"
-        f"ISTRUZIONI AZIENDALI:\n{azienda.istruzioni_ia}\n\n"
+        f"Sei l'assistente virtuale di {azienda.nome}.\n\n"
+        f"ISTRUZIONI E REGOLE DELL'AZIENDA (Segui attentamente le durate dei servizi indicate qui):\n"
+        f"{azienda.istruzioni_ia}\n\n"
         f"REGOLE FONDAMENTALI PRENOTAZIONE:\n"
-        f"1. PRIMA di confermare o registrare qualsiasi appuntamento, DEVI TASSATIVAMENTE chiamare la funzione `controlla_orario_disponibile(data_ora_iso)`.\n"
-        f"2. Se `controlla_orario_disponibile` risponde che l'orario è OCCUPATO, NON PRENOTARE! Riferisci al cliente che l'orario non è disponibile e chiedigli di scegliere un altro orario.\n"
-        f"3. Solo se l'orario risulta LIBERO, chiama `conferma_e_prenota_appuntamento` per registrarlo.\n"
-        f"4. Il formato della data e ora per i tool deve essere ISO standard: YYYY-MM-DDTHH:MM:SS (es. 2026-09-17T18:00:00).\n\n"
+        f"1. In base al servizio richiesto dal cliente e alle istruzioni aziendali, STIMA LA DURATA IN MINUTI (es. 15, 25, 30, 45, 60 minuti).\n"
+        f"2. PRIMA di confermare o registrare, chiama SEMPRE `controlla_orario_disponibile(data_ora_iso, durata_minuti)`.\n"
+        f"3. Se il controllo risponde che l'orario è OCCUPATO, NON PRENOTARE! Informa il cliente che l'orario si sovrappone a un altro appuntamento e proponi un'alternativa.\n"
+        f"4. Solo se LIBERO, chiama `conferma_e_prenota_appuntamento(data_ora_iso, servizio, nome_cliente, durata_minuti)`.\n"
+        f"5. Formato data/ora: YYYY-MM-DDTHH:MM:SS.\n\n"
         f"CRONOLOGIA CHAT:\n{conversazione}"
         f"Cliente: {messaggio_attuale}\n"
         "Assistente:"
     )
 
-    # --- HELPER PARSING FORMATI DATE ISO / SPAZIO ---
     def normalizza_data_iso(data_ora_str: str) -> str:
         clean = str(data_ora_str).strip().replace("Z", "")
         if "T" not in clean and " " in clean:
@@ -54,12 +55,13 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
                 clean = f"{parts[0]}T{time_part}:00"
         return clean
 
-    # --- TOOLS DI VERIFICA E PRENOTAZIONE CALENDAR ---
-    def controlla_orario_disponibile(data_ora_iso: str) -> str:
-        """Verifica se uno slot è libero sul Google Calendar e nel DB locale. Formato data_ora_iso: YYYY-MM-DDTHH:MM:SS."""
+    # --- TOOLS CON DURATA DINAMICA ---
+    def controlla_orario_disponibile(data_ora_iso: str, durata_minuti: int = 30) -> str:
+        """Verifica se uno slot è libero sul Google Calendar e DB. Parametri: data_ora_iso (YYYY-MM-DDTHH:MM:SS), durata_minuti (int, es. 25, 40)."""
         data_ora_iso = normalizza_data_iso(data_ora_iso)
+        durata = int(durata_minuti)
         
-        # 1. Controllo primario su DB locale
+        # 1. Controllo DB locale
         slot_occupato = db_session.query(SlotAgenda).filter(
             SlotAgenda.azienda_id == azienda.id,
             SlotAgenda.stato == "Occupato",
@@ -67,9 +69,9 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         ).first()
 
         if slot_occupato:
-            return f"ORARIO OCCUPATO: L'orario {data_ora_iso} è già stato prenotato da un altro cliente nel sistema. Scegli o proponi un orario diverso."
+            return f"ORARIO OCCUPATO: L'orario {data_ora_iso} è occupato nel DB. Proponi un altro orario."
 
-        # 2. Controllo su Google Calendar se collegato
+        # 2. Controllo Google Calendar
         if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
             try:
                 service = get_calendar_service(
@@ -79,19 +81,20 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
                     os.getenv("GOOGLE_CLIENT_SECRET")
                 )
                 cal_id = getattr(azienda, 'google_calendar_id', 'primary') or 'primary'
-                is_free = verifica_disponibilita_calendar(service, cal_id, data_ora_iso)
+                is_free = verifica_disponibilita_calendar(service, cal_id, data_ora_iso, durata)
                 if not is_free:
-                    return f"ORARIO OCCUPATO: L'orario {data_ora_iso} è occupato su Google Calendar. Proponi un altro orario."
+                    return f"ORARIO OCCUPATO: L'orario {data_ora_iso} per una durata di {durata} minuti si sovrappone a un altro evento su Google Calendar. Proponi un orario differente."
             except Exception as e:
                 print(f"Errore verifica Google Calendar: {e}")
 
-        return f"ORARIO LIBERO: L'orario {data_ora_iso} è completamente disponibile. Puoi procedere alla prenotazione."
+        return f"ORARIO LIBERO: L'orario {data_ora_iso} per {durata} minuti è completamente disponibile."
 
-    def conferma_e_prenota_appuntamento(data_ora_iso: str, servizio: str, nome_cliente: str) -> str:
-        """Prenota l'appuntamento sia su Google Calendar che sul DB locale."""
+    def conferma_e_prenota_appuntamento(data_ora_iso: str, servizio: str, nome_cliente: str, durata_minuti: int = 30) -> str:
+        """Prenota l'appuntamento indicando servizio e durata in minuti."""
         data_ora_iso = normalizza_data_iso(data_ora_iso)
+        durata = int(durata_minuti)
 
-        # 1. Scrittura su Google Calendar
+        # 1. Google Calendar
         if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
             try:
                 service = get_calendar_service(
@@ -105,13 +108,14 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
                     service, 
                     cal_id, 
                     f"{servizio} - {nome_cliente}", 
-                    f"Prenotato via WhatsApp: {contatto.numero_whatsapp}", 
-                    data_ora_iso
+                    f"Prenotato via WhatsApp per {durata} min. Tel: {contatto.numero_whatsapp}", 
+                    data_ora_iso,
+                    durata
                 )
             except Exception as e:
                 print(f"Errore inserimento Google Calendar: {e}")
 
-        # 2. Salvataggio su DB locale per memoria interna
+        # 2. DB locale
         slot = db_session.query(SlotAgenda).filter(
             SlotAgenda.azienda_id == azienda.id,
             SlotAgenda.data_ora.in_([data_ora_iso, data_ora_iso.replace("T", " "), data_ora_iso[:16]])
@@ -124,21 +128,20 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
                 stato="Occupato", 
                 cliente_nome=nome_cliente, 
                 numero_cliente=contatto.numero_whatsapp,
-                servizio=servizio
+                servizio=f"{servizio} ({durata} min)"
             )
             db_session.add(slot)
         else:
             slot.stato = "Occupato"
             slot.cliente_nome = nome_cliente
             slot.numero_cliente = contatto.numero_whatsapp
-            slot.servizio = servizio
+            slot.servizio = f"{servizio} ({durata} min)"
             
         db_session.commit()
-        return f"CONFERMATO: Appuntamento registrato per {nome_cliente} in data {data_ora_iso} per {servizio}."
+        return f"CONFERMATO: Appuntamento registrato per {nome_cliente} alle {data_ora_iso} (durata {durata} min)."
 
     tools_list = [controlla_orario_disponibile, conferma_e_prenota_appuntamento]
 
-    # 3. Chiamata a Gemini 3.6 Flash
     max_retries = 3
     for attempt in range(max_retries):
         try:
