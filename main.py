@@ -17,6 +17,7 @@ from ai_service import genera_risposta_gemini, genera_bozza_email_b2b, trova_ema
 from dashboard import get_dashboard_routes
 from instagram import get_instagram_routes
 from admin_dashboard import get_admin_routes
+from whatsapp import get_whatsapp_routes
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -192,7 +193,7 @@ app = FastAPI()
 app.include_router(get_dashboard_routes(get_db, Azienda))
 app.include_router(get_instagram_routes(get_db, Azienda, Contatto, Messaggio, SlotAgenda))
 app.include_router(get_admin_routes(get_db, Azienda, Utente, genera_hash_password))
-
+app.include_router(get_whatsapp_routes(get_db, Azienda, Contatto, Messaggio, SlotAgenda))
 # Schedulatore promemoria
 scheduler = BackgroundScheduler()
 scheduler.add_job(invia_promemoria_automatici, 'interval', minutes=15)
