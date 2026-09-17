@@ -421,11 +421,11 @@ def health_check():
 
 
 
-# Script una-tantum per creare l'Admin Supremo
+# Script sicuro per creare l'Admin Supremo tramite Variabili d'Ambiente
 @app.get("/setup-admin")
 def setup_admin(db: Session = Depends(get_db)):
-    admin_email = "andrea.onero09@gmail.com"  # Inserisci qui l'email con cui vuoi entrare
-    admin_pass = "Pestifer.09"             # Inserisci qui la tua password da admin
+    admin_email = os.getenv("ADMIN_EMAIL", "admin@iltuosaas.it")
+    admin_pass = os.getenv("ADMIN_PASSWORD", "AdminPasswordSicura123!")
     
     # Controlla se esiste l'azienda principale per l'admin
     azienda_admin = db.query(Azienda).filter(Azienda.nome == "SaaS Management").first()
@@ -451,8 +451,9 @@ def setup_admin(db: Session = Depends(get_db)):
         )
         db.add(utente)
     else:
+        utente.password_hash = genera_hash_password(admin_pass)
         utente.is_admin = True
         utente.is_active = True
     
     db.commit()
-    return {"status": "ok", "message": f"Admin creato con email: {admin_email}"}
+    return {"status": "ok", "message": f"Admin configurato con successo per: {admin_email}"}
