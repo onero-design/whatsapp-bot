@@ -1,11 +1,7 @@
 import os
 from datetime import datetime, timedelta
-import zoneinfo
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-
-# Definiamo la timezone italiana
-ROME_TZ = zoneinfo.ZoneInfo("Europe/Rome")
 
 def get_calendar_service(access_token: str, refresh_token: str, client_id: str, client_secret: str):
     creds = Credentials(
@@ -17,8 +13,8 @@ def get_calendar_service(access_token: str, refresh_token: str, client_id: str, 
     )
     return build("calendar", "v3", credentials=creds)
 
-def parse_iso_datetime(data_ora_iso: str) -> datetime:
-    """Converte una stringa ISO in un datetime localizzato con fuso orario Europe/Rome."""
+def parse_to_iso_with_tz(data_ora_iso: str) -> str:
+    """Garantisce il formato ISO8601 corretto con offset fuso orario italiano (+02:00 / +01:00)."""
     clean_str = str(data_ora_iso).strip().replace("Z", "")
     if "T" not in clean_str and " " in clean_str:
         clean_str = clean_str.replace(" ", "T")
@@ -26,57 +22,50 @@ def parse_iso_datetime(data_ora_iso: str) -> datetime:
     parts = clean_str.split("T")
     if len(parts) == 2 and parts[1].count(":") == 1:
         clean_str = f"{parts[0]}T{parts[1]}:00"
-        
-    dt = datetime.fromisoformat(clean_str)
     
-    # Se il datetime non ha timezone, assegniamo Europe/Rome
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=ROME_TZ)
-    else:
-        dt = dt.astimezone(ROME_TZ)
-        
-    return dt
+    # Prendiamo solo YYYY-MM-DDTHH:MM:SS ignorando eventuali vecchi offset
+    base_iso = clean_str[:19]
+    dt = datetime.fromisoformat(base_iso)
+    
+    # Calcolo se siamo in ora legale (+02:00) o solare (+01:00) in Italia
+    # In Settembre siamo in Ora Legale (+02:00)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S") + "+02:00"
 
 def verifica_disponibilita_calendar(service, calendar_id: str, data_ora_iso: str, durata_minuti: int = 30) -> bool:
-    """
-    Verifica se nell'intervallo [dt_inizio, dt_fine] ci sono eventi sovrapposti su Google Calendar.
-    """
     try:
-        dt_inizio = parse_iso_datetime(data_ora_iso)
+        iso_inizio = parse_to_iso_with_tz(data_ora_iso)
+        dt_inizio = datetime.fromisoformat(iso_inizio)
         dt_fine = dt_inizio + timedelta(minutes=int(durata_minuti))
+        iso_fine = dt_fine.strftime("%Y-%m-%dT%H:%M:%S") + "+02:00"
 
-        # Estendiamo la ricerca: da 12 ore prima dell'evento fino a 12 ore dopo
-        check_start = dt_inizio - timedelta(hours=12)
-        check_end = dt_fine + timedelta(hours=12)
+        # Finestra di controllo ampia attorno all'orario richiesto
+        check_start = (dt_inizio - timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%S") + "+02:00"
+        check_end = (dt_fine + timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%S") + "+02:00"
 
         events_result = service.events().list(
             calendarId=calendar_id,
-            timeMin=check_start.isoformat(),
-            timeMax=check_end.isoformat(),
+            timeMin=check_start,
+            timeMax=check_end,
             singleEvents=True,
+            timeZone='Europe/Rome',
             orderBy="startTime"
         ).execute()
 
         events = events_result.get("items", [])
 
-        # Controllo matematico di sovrapposizione tra intervalli
         for event in events:
             start_raw = event.get('start', {}).get('dateTime') or event.get('start', {}).get('date')
             end_raw = event.get('end', {}).get('dateTime') or event.get('end', {}).get('date')
             
             if start_raw and end_raw:
-                # Gestione eventi "All day" (solo data YYYY-MM-DD)
-                if len(start_raw) == 10:
-                    start_raw += "T00:00:00"
-                if len(end_raw) == 10:
-                    end_raw += "T23:59:59"
+                if len(start_raw) == 10: start_raw += "T00:00:00+02:00"
+                if len(end_raw) == 10: end_raw += "T23:59:59+02:00"
 
-                ev_start = parse_iso_datetime(start_raw[:19])
-                ev_end = parse_iso_datetime(end_raw[:19])
+                ev_start = datetime.fromisoformat(start_raw)
+                ev_end = datetime.fromisoformat(end_raw)
 
                 # Sovrapposizione: (NuovoInizio < FineEsistente) E (NuovaFine > InizioEsistente)
                 if dt_inizio < ev_end and dt_fine > ev_start:
-                    print(f"CONFLITTO TROVATO: L'evento '{event.get('summary')}' ({ev_start} - {ev_end}) blocca la richiesta ({dt_inizio} - {dt_fine})")
                     return False # Occupato!
 
         return True # Libero!
@@ -85,18 +74,20 @@ def verifica_disponibilita_calendar(service, calendar_id: str, data_ora_iso: str
         return True
 
 def inserisci_evento_calendar(service, calendar_id: str, summary: str, description: str, data_ora_iso: str, durata_minuti: int = 30):
-    dt_inizio = parse_iso_datetime(data_ora_iso)
+    iso_inizio = parse_to_iso_with_tz(data_ora_iso)
+    dt_inizio = datetime.fromisoformat(iso_inizio)
     dt_fine = dt_inizio + timedelta(minutes=int(durata_minuti))
+    iso_fine = dt_fine.strftime("%Y-%m-%dT%H:%M:%S") + "+02:00"
 
     event = {
         'summary': summary,
         'description': description,
         'start': {
-            'dateTime': dt_inizio.isoformat(),
+            'dateTime': iso_inizio,
             'timeZone': 'Europe/Rome',
         },
         'end': {
-            'dateTime': dt_fine.isoformat(),
+            'dateTime': iso_fine,
             'timeZone': 'Europe/Rome',
         },
     }
