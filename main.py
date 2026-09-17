@@ -418,3 +418,41 @@ def imposta_numero_sandbox(azienda_id: int, db: Session = Depends(get_db)):
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health_check():
     return {"status": "ok"}
+
+
+
+# Script una-tantum per creare l'Admin Supremo
+@app.get("/setup-admin")
+def setup_admin(db: Session = Depends(get_db)):
+    admin_email = "andrea.onero09@gmail.com"  # Inserisci qui l'email con cui vuoi entrare
+    admin_pass = "Pestifer.09"             # Inserisci qui la tua password da admin
+    
+    # Controlla se esiste l'azienda principale per l'admin
+    azienda_admin = db.query(Azienda).filter(Azienda.nome == "SaaS Management").first()
+    if not azienda_admin:
+        azienda_admin = Azienda(
+            nome="SaaS Management",
+            numero_whatsapp_business="whatsapp:+390000000000",
+            istruzioni_ia="Azienda Amministratore SaaS"
+        )
+        db.add(azienda_admin)
+        db.commit()
+        db.refresh(azienda_admin)
+
+    # Crea o aggiorna l'utente Admin
+    utente = db.query(Utente).filter(Utente.email == admin_email).first()
+    if not utente:
+        utente = Utente(
+            email=admin_email,
+            password_hash=genera_hash_password(admin_pass),
+            azienda_id=azienda_admin.id,
+            is_active=True,
+            is_admin=True
+        )
+        db.add(utente)
+    else:
+        utente.is_admin = True
+        utente.is_active = True
+    
+    db.commit()
+    return {"status": "ok", "message": f"Admin creato con email: {admin_email}"}
