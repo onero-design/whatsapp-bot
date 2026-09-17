@@ -1,7 +1,11 @@
 import os
 from datetime import datetime, timedelta
+import zoneinfo
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+
+# Definiamo la timezone italiana
+ROME_TZ = zoneinfo.ZoneInfo("Europe/Rome")
 
 def get_calendar_service(access_token: str, refresh_token: str, client_id: str, client_secret: str):
     creds = Credentials(
@@ -14,6 +18,7 @@ def get_calendar_service(access_token: str, refresh_token: str, client_id: str, 
     return build("calendar", "v3", credentials=creds)
 
 def parse_iso_datetime(data_ora_iso: str) -> datetime:
+    """Converte una stringa ISO in un datetime localizzato con fuso orario Europe/Rome."""
     clean_str = str(data_ora_iso).strip().replace("Z", "")
     if "T" not in clean_str and " " in clean_str:
         clean_str = clean_str.replace(" ", "T")
@@ -22,44 +27,56 @@ def parse_iso_datetime(data_ora_iso: str) -> datetime:
     if len(parts) == 2 and parts[1].count(":") == 1:
         clean_str = f"{parts[0]}T{parts[1]}:00"
         
-    return datetime.fromisoformat(clean_str)
+    dt = datetime.fromisoformat(clean_str)
+    
+    # Se il datetime non ha timezone, assegniamo Europe/Rome
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ROME_TZ)
+    else:
+        dt = dt.astimezone(ROME_TZ)
+        
+    return dt
 
 def verifica_disponibilita_calendar(service, calendar_id: str, data_ora_iso: str, durata_minuti: int = 30) -> bool:
     """
     Verifica se nell'intervallo [dt_inizio, dt_fine] ci sono eventi sovrapposti su Google Calendar.
-    Controlla anche un margine precedente per evitare di sovrapporsi ad appuntamenti già iniziati.
     """
     try:
         dt_inizio = parse_iso_datetime(data_ora_iso)
         dt_fine = dt_inizio + timedelta(minutes=int(durata_minuti))
 
-        # Estendiamo la ricerca a ritroso (es. -2 ore) per intercettare eventi già in corso
-        check_start = dt_inizio - timedelta(hours=2)
-        
-        time_min = check_start.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
-        time_max = dt_fine.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+        # Estendiamo la ricerca: da 12 ore prima dell'evento fino a 12 ore dopo
+        check_start = dt_inizio - timedelta(hours=12)
+        check_end = dt_fine + timedelta(hours=12)
 
         events_result = service.events().list(
             calendarId=calendar_id,
-            timeMin=time_min,
-            timeMax=time_max,
+            timeMin=check_start.isoformat(),
+            timeMax=check_end.isoformat(),
             singleEvents=True,
             orderBy="startTime"
         ).execute()
 
         events = events_result.get("items", [])
 
-        # Controllo matematico di sovrapposizione intervalli [A, B] e [C, D]
+        # Controllo matematico di sovrapposizione tra intervalli
         for event in events:
-            start_str = event.get('start', {}).get('dateTime') or event.get('start', {}).get('date')
-            end_str = event.get('end', {}).get('dateTime') or event.get('end', {}).get('date')
+            start_raw = event.get('start', {}).get('dateTime') or event.get('start', {}).get('date')
+            end_raw = event.get('end', {}).get('dateTime') or event.get('end', {}).get('date')
             
-            if start_str and end_str:
-                ev_start = parse_iso_datetime(start_str[:19])
-                ev_end = parse_iso_datetime(end_str[:19])
+            if start_raw and end_raw:
+                # Gestione eventi "All day" (solo data YYYY-MM-DD)
+                if len(start_raw) == 10:
+                    start_raw += "T00:00:00"
+                if len(end_raw) == 10:
+                    end_raw += "T23:59:59"
 
-                # Se (InizioNuovo < FineEsistente) E (FineNuova > InizioEsistente) -> Sovrapposizione!
+                ev_start = parse_iso_datetime(start_raw[:19])
+                ev_end = parse_iso_datetime(end_raw[:19])
+
+                # Sovrapposizione: (NuovoInizio < FineEsistente) E (NuovaFine > InizioEsistente)
                 if dt_inizio < ev_end and dt_fine > ev_start:
+                    print(f"CONFLITTO TROVATO: L'evento '{event.get('summary')}' ({ev_start} - {ev_end}) blocca la richiesta ({dt_inizio} - {dt_fine})")
                     return False # Occupato!
 
         return True # Libero!
