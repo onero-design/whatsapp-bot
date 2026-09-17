@@ -16,6 +16,7 @@ from jinja2 import Template
 from ai_service import genera_risposta_gemini, genera_bozza_email_b2b, trova_email_dominio_ia
 from dashboard import get_dashboard_routes
 from instagram import get_instagram_routes
+from admin_dashboard import get_admin_routes
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -100,15 +101,22 @@ class Utente(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
     azienda_id = Column(Integer, ForeignKey("aziende.id"), nullable=False)
+    # --- NUOVI CAMPI PER LA GESTIONE SAAS ---
+    is_active = Column(Boolean, default=True)   # True = Attivo, False = Disabilitato (non paga)
+    is_admin = Column(Boolean, default=False)   # True solo per la TUA email personale
 
     azienda = relationship("Azienda", back_populates="utenti")
 
-# Allineamento automatico colonne Google Calendar nel DB
+# Allineamento automatico colonne nel DB
 try:
     with engine.connect() as conn:
         conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_access_token TEXT;"))
         conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;"))
         conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_calendar_id VARCHAR DEFAULT 'primary';"))
+        
+        # Migrazioni per Utente
+        conn.execute(text("ALTER TABLE utenti ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
+        conn.execute(text("ALTER TABLE utenti ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;"))
         conn.commit()
 except Exception as e:
     print(f"Errore durante la migrazione del DB: {e}")
@@ -183,6 +191,7 @@ app = FastAPI()
 # Collega i moduli di Dashboard e Instagram
 app.include_router(get_dashboard_routes(get_db, Azienda))
 app.include_router(get_instagram_routes(get_db, Azienda, Contatto, Messaggio, SlotAgenda))
+app.include_router(get_admin_routes(get_db, Azienda, Utente, genera_hash_password))
 
 # Schedulatore promemoria
 scheduler = BackgroundScheduler()
@@ -265,9 +274,23 @@ async def effettua_login(
             content=template.render(request=request, errore="Email o password errati."),
             status_code=401
         )
+    # CHECK BLOCCO UTENTE (Se non paga o è disattivato)
+    if not utente.is_active:
+        with open("login.html", "r", encoding="utf-8") as f:
+            template = Template(f.read())
+        return HTMLResponse(
+            content=template.render(request=request, errore="Account sospeso. Contatta l'amministratore."),
+            status_code=403
+        )
 
-    response = RedirectResponse(url=f"/dashboard/{utente.azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
+    # Se sei l'Admin va alla Super Dashboard, altrimenti alla dashboard del cliente
+    if utente.is_admin:
+        response = RedirectResponse(url="/admin/super-dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    else:
+        response = RedirectResponse(url=f"/dashboard/{utente.azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
+        
     response.set_cookie(key="azienda_id", value=str(utente.azienda_id), httponly=True)
+    response.set_cookie(key="utente_id", value=str(utente.id), httponly=True)
     return response
 
 @app.get("/logout")
