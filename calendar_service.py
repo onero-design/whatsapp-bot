@@ -4,7 +4,6 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 def get_calendar_service(access_token: str, refresh_token: str, client_id: str, client_secret: str):
-    """Crea e restituisce il servizio Google Calendar con credenziali aggiornate."""
     creds = Credentials(
         token=access_token,
         refresh_token=refresh_token,
@@ -15,7 +14,7 @@ def get_calendar_service(access_token: str, refresh_token: str, client_id: str, 
     return build("calendar", "v3", credentials=creds)
 
 def parse_iso_datetime(data_ora_iso: str) -> datetime:
-    clean_str = data_ora_iso.strip().replace("Z", "")
+    clean_str = str(data_ora_iso).strip().replace("Z", "")
     if "T" not in clean_str and " " in clean_str:
         clean_str = clean_str.replace(" ", "T")
     
@@ -27,15 +26,17 @@ def parse_iso_datetime(data_ora_iso: str) -> datetime:
 
 def verifica_disponibilita_calendar(service, calendar_id: str, data_ora_iso: str, durata_minuti: int = 30) -> bool:
     """
-    Verifica se nella finestra di tempo selezionata ci sono eventi sovrapposti su Google Calendar.
-    Restituisce True se è LIBERO, False se è OCCUPATO.
+    Verifica se nell'intervallo [dt_inizio, dt_fine] ci sono eventi sovrapposti su Google Calendar.
+    Controlla anche un margine precedente per evitare di sovrapporsi ad appuntamenti già iniziati.
     """
     try:
         dt_inizio = parse_iso_datetime(data_ora_iso)
-        dt_fine = dt_inizio + timedelta(minutes=durata_minuti)
+        dt_fine = dt_inizio + timedelta(minutes=int(durata_minuti))
 
-        # Formattazione ISO con offset (es. Italia/Europa)
-        time_min = dt_inizio.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+        # Estendiamo la ricerca a ritroso (es. -2 ore) per intercettare eventi già in corso
+        check_start = dt_inizio - timedelta(hours=2)
+        
+        time_min = check_start.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
         time_max = dt_fine.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
 
         events_result = service.events().list(
@@ -47,18 +48,28 @@ def verifica_disponibilita_calendar(service, calendar_id: str, data_ora_iso: str
         ).execute()
 
         events = events_result.get("items", [])
-        return len(events) == 0
+
+        # Controllo matematico di sovrapposizione intervalli [A, B] e [C, D]
+        for event in events:
+            start_str = event.get('start', {}).get('dateTime') or event.get('start', {}).get('date')
+            end_str = event.get('end', {}).get('dateTime') or event.get('end', {}).get('date')
+            
+            if start_str and end_str:
+                ev_start = parse_iso_datetime(start_str[:19])
+                ev_end = parse_iso_datetime(end_str[:19])
+
+                # Se (InizioNuovo < FineEsistente) E (FineNuova > InizioEsistente) -> Sovrapposizione!
+                if dt_inizio < ev_end and dt_fine > ev_start:
+                    return False # Occupato!
+
+        return True # Libero!
     except Exception as e:
         print(f"Errore verifica_disponibilita_calendar: {e}")
-        # In caso di dubbio o errore di connessione a Google, assumiamo libero lasciando fare il controllo al DB
         return True
 
 def inserisci_evento_calendar(service, calendar_id: str, summary: str, description: str, data_ora_iso: str, durata_minuti: int = 30):
-    """
-    Inserisce un evento su Google Calendar.
-    """
     dt_inizio = parse_iso_datetime(data_ora_iso)
-    dt_fine = dt_inizio + timedelta(minutes=durata_minuti)
+    dt_fine = dt_inizio + timedelta(minutes=int(durata_minuti))
 
     event = {
         'summary': summary,
