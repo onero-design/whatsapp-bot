@@ -32,6 +32,9 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 
+EVOLUTION_URL = os.getenv("EVOLUTION_URL", "https://evolution-api-4qd9.onrender.com")
+EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY")
+
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
@@ -198,6 +201,94 @@ app.include_router(get_whatsapp_routes(get_db, Azienda, Contatto, Messaggio, Slo
 scheduler = BackgroundScheduler()
 scheduler.add_job(invia_promemoria_automatici, 'interval', minutes=15)
 scheduler.start()
+
+# --- INTEGRATORE EVOLUTION API ---
+def invia_messaggio_evolution(istanza: str, numero_destinatario: str, testo: str):
+    if not EVOLUTION_URL or not EVOLUTION_API_KEY:
+        print("EVOLUTION_URL o EVOLUTION_API_KEY non configurati.")
+        return None
+    url = f"{EVOLUTION_URL}/message/sendText/{istanza}"
+    headers = {
+        "apikey": EVOLUTION_API_KEY,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "number": numero_destinatario,
+        "text": testo
+    }
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        return response.json()
+    except Exception as e:
+        print(f"Errore invio messaggio Evolution API: {e}")
+        return None
+
+def elabora_e_rispondi_evolution(istanza: str, numero_cliente: str, testo_messaggio: str):
+    db = SessionLocal()
+    try:
+        # Cerca l'azienda in base all'istanza o al numero associato
+        azienda = db.query(Azienda).filter(
+            (Azienda.nome == istanza) | (Azienda.numero_whatsapp_business == numero_cliente)
+        ).first()
+
+        if not azienda:
+            azienda = db.query(Azienda).first()
+
+        if not azienda:
+            return
+
+        contatto = db.query(Contatto).filter(
+            Contatto.numero_whatsapp == numero_cliente,
+            Contatto.azienda_id == azienda.id
+        ).first()
+
+        if not contatto:
+            contatto = Contatto(numero_whatsapp=numero_cliente, azienda_id=azienda.id)
+            db.add(contatto)
+            db.commit()
+            db.refresh(contatto)
+
+        db.add(Messaggio(contatto_id=contatto.id, direzione="INBOUND", testo=testo_messaggio))
+        db.commit()
+
+        try:
+            risposta_ia = genera_risposta_gemini(azienda, contatto, testo_messaggio, db, SlotAgenda, Messaggio)
+        except Exception as e:
+            print(f"Errore genera_risposta_gemini via Evolution: {e}")
+            risposta_ia = "Si è verificato un errore momentaneo nell'elaborazione della risposta."
+
+        db.add(Messaggio(contatto_id=contatto.id, direzione="OUTBOUND", testo=risposta_ia))
+        db.commit()
+
+        invia_messaggio_evolution(istanza, numero_cliente, risposta_ia)
+    finally:
+        db.close()
+
+@app.post("/webhook/evolution")
+async def webhook_evolution(request: Request, background_tasks: BackgroundTasks):
+    data = await request.json()
+    event = data.get("event")
+
+    if event == "messages.upsert":
+        message_data = data.get("data", {})
+
+        if message_data.get("key", {}).get("fromMe"):
+            return {"status": "ignored"}
+
+        remote_jid = message_data.get("key", {}).get("remoteJid", "")
+        numero_mittente = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
+
+        testo_messaggio = (
+            message_data.get("message", {}).get("conversation") or
+            message_data.get("message", {}).get("extendedTextMessage", {}).get("text")
+        )
+
+        nome_istanza = data.get("instance")
+
+        if testo_messaggio and numero_mittente:
+            background_tasks.add_task(elabora_e_rispondi_evolution, nome_istanza, numero_mittente, testo_messaggio)
+
+    return {"status": "success"}
 
 # --- ROTTE OAUTH2 GOOGLE CALENDAR ---
 
@@ -419,8 +510,6 @@ def imposta_numero_sandbox(azienda_id: int, db: Session = Depends(get_db)):
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health_check():
     return {"status": "ok"}
-
-
 
 # Script sicuro per creare l'Admin Supremo tramite Variabili d'Ambiente
 @app.get("/setup-admin")
