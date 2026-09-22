@@ -70,6 +70,7 @@ class Contatto(Base):
     azienda_id = Column(Integer, ForeignKey("aziende.id"))
     numero_whatsapp = Column(String, index=True, nullable=False)
     stato = Column(String, default="Nuovo Lead")
+    bot_attivo = Column(Boolean, default=True)  # <-- GESTIONE BOT ON/OFF
     creato_il = Column(DateTime, default=datetime.utcnow)
     
     azienda = relationship("Azienda", back_populates="contatti")
@@ -105,9 +106,8 @@ class Utente(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
     azienda_id = Column(Integer, ForeignKey("aziende.id"), nullable=False)
-    # --- NUOVI CAMPI PER LA GESTIONE SAAS ---
-    is_active = Column(Boolean, default=True)   # True = Attivo, False = Disabilitato (non paga)
-    is_admin = Column(Boolean, default=False)   # True solo per la TUA email personale
+    is_active = Column(Boolean, default=True)
+    is_admin = Column(Boolean, default=False)
 
     azienda = relationship("Azienda", back_populates="utenti")
 
@@ -118,9 +118,11 @@ try:
         conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;"))
         conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_calendar_id VARCHAR DEFAULT 'primary';"))
         
-        # Migrazioni per Utente
         conn.execute(text("ALTER TABLE utenti ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
         conn.execute(text("ALTER TABLE utenti ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;"))
+        
+        # Migrazione Contatto per Bot ON/OFF
+        conn.execute(text("ALTER TABLE contatti ADD COLUMN IF NOT EXISTS bot_attivo BOOLEAN DEFAULT TRUE;"))
         conn.commit()
 except Exception as e:
     print(f"Errore durante la migrazione del DB: {e}")
@@ -192,12 +194,11 @@ def invia_promemoria_automatici():
 # --- FASTAPI APP & ROUTERS ---
 app = FastAPI()
 
-# Collega i moduli di Dashboard e Instagram
-app.include_router(get_dashboard_routes(get_db, Azienda))
+app.include_router(get_dashboard_routes(get_db, Azienda, Contatto))
 app.include_router(get_instagram_routes(get_db, Azienda, Contatto, Messaggio, SlotAgenda))
 app.include_router(get_admin_routes(get_db, Azienda, Utente, genera_hash_password))
 app.include_router(get_whatsapp_routes(get_db, Azienda, Contatto, Messaggio, SlotAgenda))
-# Schedulatore promemoria
+
 scheduler = BackgroundScheduler()
 scheduler.add_job(invia_promemoria_automatici, 'interval', minutes=15)
 scheduler.start()
@@ -226,7 +227,6 @@ def invia_messaggio_evolution(istanza: str, numero_destinatario: str, testo: str
 def elabora_e_rispondi_evolution(istanza: str, numero_cliente: str, testo_messaggio: str):
     db = SessionLocal()
     try:
-        # Cerca l'azienda in base all'istanza o al numero associato
         azienda = db.query(Azienda).filter(
             (Azienda.nome == istanza) | (Azienda.numero_whatsapp_business == numero_cliente)
         ).first()
@@ -243,13 +243,18 @@ def elabora_e_rispondi_evolution(istanza: str, numero_cliente: str, testo_messag
         ).first()
 
         if not contatto:
-            contatto = Contatto(numero_whatsapp=numero_cliente, azienda_id=azienda.id)
+            contatto = Contatto(numero_whatsapp=numero_cliente, azienda_id=azienda.id, bot_attivo=True)
             db.add(contatto)
             db.commit()
             db.refresh(contatto)
 
         db.add(Messaggio(contatto_id=contatto.id, direzione="INBOUND", testo=testo_messaggio))
         db.commit()
+
+        # CONTROLLO BOT ATTIVO/DISATTIVATO PER QUESTO CONTATTO
+        if not contatto.bot_attivo:
+            print(f"Bot DISATTIVATO per il contatto {numero_cliente}. Risposta automatica saltata.")
+            return
 
         try:
             risposta_ia = genera_risposta_gemini(azienda, contatto, testo_messaggio, db, SlotAgenda, Messaggio)
@@ -276,7 +281,6 @@ async def webhook_evolution(request: Request, background_tasks: BackgroundTasks)
     if event in ["messages_upsert", "messages.upsert"]:
         raw_data = data.get("data", {})
         
-        # Se data è una lista di messaggi, prendiamo il primo item
         if isinstance(raw_data, list) and len(raw_data) > 0:
             message_data = raw_data[0]
         elif isinstance(raw_data, dict):
@@ -286,19 +290,15 @@ async def webhook_evolution(request: Request, background_tasks: BackgroundTasks)
 
         key = message_data.get("key", {})
         
-        # Ignora i messaggi inviati da noi stessi
         if key.get("fromMe"):
             return {"status": "ignored_from_me"}
 
-        # Estrai il numero del mittente
         remote_jid = key.get("remoteJid", "")
         participant = key.get("participant", "")
         
-        # Se il messaggio proviene da un gruppo o usa LID, gestisci il mittente reale
         target_jid = remote_jid if not participant else participant
         numero_mittente = target_jid.split("@")[0] if "@" in target_jid else target_jid
 
-        # Estrai il contenuto del testo del messaggio
         msg_obj = message_data.get("message", {})
         testo_messaggio = None
 
@@ -323,7 +323,6 @@ async def webhook_evolution(request: Request, background_tasks: BackgroundTasks)
 
 @app.get("/auth/google/login")
 def google_login(azienda_id: int):
-    """Avvia il flusso OAuth2 per collegare Google Calendar."""
     if not GOOGLE_CLIENT_ID or not GOOGLE_REDIRECT_URI:
         raise HTTPException(status_code=500, detail="Credenziali GOOGLE_CLIENT_ID o GOOGLE_REDIRECT_URI non configurate su Render.")
         
@@ -341,7 +340,6 @@ def google_login(azienda_id: int):
 
 @app.get("/auth/google/callback")
 def google_callback(code: str, state: str, db: Session = Depends(get_db)):
-    """Riceve il codice di autorizzazione da Google e salva i token nel DB."""
     azienda_id = int(state)
     
     token_url = "https://oauth2.googleapis.com/token"
@@ -395,7 +393,7 @@ async def effettua_login(
             content=template.render(request=request, errore="Email o password errati."),
             status_code=401
         )
-    # CHECK BLOCCO UTENTE (Se non paga o è disattivato)
+
     if not utente.is_active:
         with open("login.html", "r", encoding="utf-8") as f:
             template = Template(f.read())
@@ -404,7 +402,6 @@ async def effettua_login(
             status_code=403
         )
 
-    # Se sei l'Admin va alla Super Dashboard, altrimenti alla dashboard del cliente
     if utente.is_admin:
         response = RedirectResponse(url="/admin/super-dashboard", status_code=status.HTTP_303_SEE_OTHER)
     else:
@@ -458,13 +455,18 @@ async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str
     ).first()
 
     if not contatto:
-        contatto = Contatto(numero_whatsapp=numero_cliente, azienda_id=azienda.id)
+        contatto = Contatto(numero_whatsapp=numero_cliente, azienda_id=azienda.id, bot_attivo=True)
         db.add(contatto)
         db.commit()
         db.refresh(contatto)
 
     db.add(Messaggio(contatto_id=contatto.id, direzione="INBOUND", testo=messaggio_utente))
     db.commit()
+
+    if not contatto.bot_attivo:
+        print(f"Bot disattivato per {numero_cliente}. Nessuna risposta inviata.")
+        resp = MessagingResponse()
+        return Response(content=str(resp), media_type="application/xml")
 
     try:
         risposta_ia = genera_risposta_gemini(azienda, contatto, messaggio_utente, db, SlotAgenda, Messaggio)
@@ -540,13 +542,11 @@ def imposta_numero_sandbox(azienda_id: int, db: Session = Depends(get_db)):
 def health_check():
     return {"status": "ok"}
 
-# Script sicuro per creare l'Admin Supremo tramite Variabili d'Ambiente
 @app.get("/setup-admin")
 def setup_admin(db: Session = Depends(get_db)):
     admin_email = os.getenv("ADMIN_EMAIL", "admin@iltuosaas.it")
     admin_pass = os.getenv("ADMIN_PASSWORD", "AdminPasswordSicura123!")
     
-    # Controlla se esiste l'azienda principale per l'admin
     azienda_admin = db.query(Azienda).filter(Azienda.nome == "SaaS Management").first()
     if not azienda_admin:
         azienda_admin = Azienda(
@@ -558,7 +558,6 @@ def setup_admin(db: Session = Depends(get_db)):
         db.commit()
         db.refresh(azienda_admin)
 
-    # Crea o aggiorna l'utente Admin
     utente = db.query(Utente).filter(Utente.email == admin_email).first()
     if not utente:
         utente = Utente(
