@@ -266,29 +266,58 @@ def elabora_e_rispondi_evolution(istanza: str, numero_cliente: str, testo_messag
 
 @app.post("/webhook/evolution")
 async def webhook_evolution(request: Request, background_tasks: BackgroundTasks):
-    data = await request.json()
-    event = data.get("event")
+    try:
+        data = await request.json()
+    except Exception:
+        return {"status": "invalid json"}
 
-    if event == "messages.upsert":
-        message_data = data.get("data", {})
+    event = str(data.get("event", "")).lower()
 
-        if message_data.get("key", {}).get("fromMe"):
-            return {"status": "ignored"}
+    if event in ["messages_upsert", "messages.upsert"]:
+        raw_data = data.get("data", {})
+        
+        # Se data è una lista di messaggi, prendiamo il primo item
+        if isinstance(raw_data, list) and len(raw_data) > 0:
+            message_data = raw_data[0]
+        elif isinstance(raw_data, dict):
+            message_data = raw_data
+        else:
+            return {"status": "no message data"}
 
-        remote_jid = message_data.get("key", {}).get("remoteJid", "")
-        numero_mittente = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
+        key = message_data.get("key", {})
+        
+        # Ignora i messaggi inviati da noi stessi
+        if key.get("fromMe"):
+            return {"status": "ignored_from_me"}
 
-        testo_messaggio = (
-            message_data.get("message", {}).get("conversation") or
-            message_data.get("message", {}).get("extendedTextMessage", {}).get("text")
-        )
+        # Estrai il numero del mittente
+        remote_jid = key.get("remoteJid", "")
+        participant = key.get("participant", "")
+        
+        # Se il messaggio proviene da un gruppo o usa LID, gestisci il mittente reale
+        target_jid = remote_jid if not participant else participant
+        numero_mittente = target_jid.split("@")[0] if "@" in target_jid else target_jid
 
-        nome_istanza = data.get("instance")
+        # Estrai il contenuto del testo del messaggio
+        msg_obj = message_data.get("message", {})
+        testo_messaggio = None
+
+        if isinstance(msg_obj, dict):
+            testo_messaggio = (
+                msg_obj.get("conversation") or
+                msg_obj.get("extendedTextMessage", {}).get("text") or
+                msg_obj.get("imageMessage", {}).get("caption") or
+                msg_obj.get("videoMessage", {}).get("caption")
+            )
+
+        nome_istanza = data.get("instance", "pasticceria")
 
         if testo_messaggio and numero_mittente:
+            print(f" Ricevuto messaggio da {numero_mittente} per {nome_istanza}: {testo_messaggio}")
             background_tasks.add_task(elabora_e_rispondi_evolution, nome_istanza, numero_mittente, testo_messaggio)
+            return {"status": "processing"}
 
-    return {"status": "success"}
+    return {"status": "ignored"}
 
 # --- ROTTE OAUTH2 GOOGLE CALENDAR ---
 
