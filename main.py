@@ -299,6 +299,20 @@ async def webhook_evolution(request: Request, background_tasks: BackgroundTasks)
         target_jid = remote_jid if not participant else participant
         numero_mittente = target_jid.split("@")[0] if "@" in target_jid else target_jid
 
+        # --- CONTROLLO STATO BOT NEL DATABASE ---
+        # Si apre una sessione rapida del DB per verificare se il bot è attivo per questo specifico contatto
+        if numero_mittente:
+            db_session = SessionLocal()
+            try:
+                contatto = db_session.query(Contatto).filter(Contatto.numero == numero_mittente).first()
+                if contatto and not contatto.bot_attivo:
+                    print(f"🛑 Bot DISATTIVATO da dashboard per il contatto {numero_mittente}. Risposta ignorata.")
+                    return {"status": "bot_disabled_for_contact"}
+            except Exception as e:
+                print(f"⚠️ Errore durante la verifica dello stato del contatto nel DB: {e}")
+            finally:
+                db_session.close()
+
         msg_obj = message_data.get("message", {})
         testo_messaggio = None
 
@@ -313,11 +327,11 @@ async def webhook_evolution(request: Request, background_tasks: BackgroundTasks)
         nome_istanza = data.get("instance", "pasticceria")
 
         if testo_messaggio and numero_mittente:
-            print(f" Ricevuto messaggio da {numero_mittente} per {nome_istanza}: {testo_messaggio}")
+            print(f"📩 Ricevuto messaggio da {numero_mittente} per {nome_istanza}: {testo_messaggio}")
             background_tasks.add_task(elabora_e_rispondi_evolution, nome_istanza, numero_mittente, testo_messaggio)
             return {"status": "processing"}
 
-    return {"status": "ignored"}
+    return {"status": "event_ignored"}
 
 # --- ROTTE OAUTH2 GOOGLE CALENDAR ---
 
