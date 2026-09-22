@@ -33,7 +33,7 @@ def invia_messaggio_qr(azienda, numero_destinatario: str, testo: str):
 
 def get_whatsapp_routes(get_db_func, AziendaModel, ContattoModel, MessaggioModel, SlotAgendaModel):
 
-    # --- WEBHOOK TWILIO (PER IL FUTURO CON P.IVA) ---
+    # --- WEBHOOK TWILIO ---
     @router.post("/webhook")
     async def whatsapp_twilio_webhook(
         From: str = Form(...), 
@@ -55,13 +55,19 @@ def get_whatsapp_routes(get_db_func, AziendaModel, ContattoModel, MessaggioModel
         ).first()
 
         if not contatto:
-            contatto = ContattoModel(numero_whatsapp=numero_cliente, azienda_id=azienda.id)
+            contatto = ContattoModel(numero_whatsapp=numero_cliente, azienda_id=azienda.id, bot_attivo=True)
             db.add(contatto)
             db.commit()
             db.refresh(contatto)
 
         db.add(MessaggioModel(contatto_id=contatto.id, direzione="INBOUND", testo=messaggio_utente))
         db.commit()
+
+        # CONTROLLO BOT ATTIVO
+        if not contatto.bot_attivo:
+            print(f"Bot disattivato per {numero_cliente}. Nessuna risposta generata.")
+            resp = MessagingResponse()
+            return Response(content=str(resp), media_type="application/xml")
 
         try:
             risposta_ia = genera_risposta_gemini(azienda, contatto, messaggio_utente, db, SlotAgendaModel, MessaggioModel)
@@ -76,7 +82,7 @@ def get_whatsapp_routes(get_db_func, AziendaModel, ContattoModel, MessaggioModel
         return Response(content=str(resp), media_type="application/xml")
 
 
-    # --- WEBHOOK QR-CODE (PER INIZIARE SUBITO SENZA P.IVA) ---
+    # --- WEBHOOK QR-CODE ---
     @router.post("/qr-webhook")
     async def whatsapp_qr_webhook(request: Request, db: Session = Depends(get_db_func)):
         try:
@@ -108,13 +114,18 @@ def get_whatsapp_routes(get_db_func, AziendaModel, ContattoModel, MessaggioModel
         ).first()
 
         if not contatto:
-            contatto = ContattoModel(numero_whatsapp=numero_cliente_clean, azienda_id=azienda.id)
+            contatto = ContattoModel(numero_whatsapp=numero_cliente_clean, azienda_id=azienda.id, bot_attivo=True)
             db.add(contatto)
             db.commit()
             db.refresh(contatto)
 
         db.add(MessaggioModel(contatto_id=contatto.id, direzione="INBOUND", testo=messaggio_utente))
         db.commit()
+
+        # CONTROLLO BOT ATTIVO
+        if not contatto.bot_attivo:
+            print(f"Bot disattivato per {numero_cliente_clean}. Ignoro la risposta.")
+            return {"status": "success", "message": "Bot disattivato per questo contatto"}
 
         try:
             risposta_ia = genera_risposta_gemini(azienda, contatto, messaggio_utente, db, SlotAgendaModel, MessaggioModel)
