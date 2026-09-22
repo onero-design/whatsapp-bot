@@ -13,7 +13,6 @@ def get_instagram_routes(
     get_db_func, AziendaModel, ContattoModel, MessaggioModel, SlotAgendaModel
 ):
 
-    # 1. Verifica Webhook (GET) -> URL: /instagram/webhook
     @router.get("/webhook")
     async def verify_webhook(request: Request):
         params = request.query_params
@@ -25,14 +24,12 @@ def get_instagram_routes(
             return Response(content=challenge, status_code=200)
         return Response(content="Verification failed", status_code=403)
 
-    # 2. Ricezione e Gestione Messaggi (POST) -> URL: /instagram/webhook
     @router.post("/webhook")
     async def instagram_webhook(
         request: Request, db: Session = Depends(get_db_func)
     ):
         data = await request.json()
 
-        # Legge le variabili d'ambiente aggiornate al momento della chiamata
         page_access_token = os.getenv("INSTAGRAM_PAGE_ACCESS_TOKEN", "").strip()
         instagram_account_id = os.getenv("INSTAGRAM_ACCOUNT_ID", "").strip()
 
@@ -42,7 +39,6 @@ def get_instagram_routes(
                     sender_id = messaging.get("sender", {}).get("id")
                     message_text = messaging.get("message", {}).get("text")
 
-                    # Ignora se non c'è testo o se il messaggio proviene dal bot stesso
                     if (
                         sender_id
                         and message_text
@@ -67,6 +63,7 @@ def get_instagram_routes(
                             contatto = ContattoModel(
                                 numero_whatsapp=f"IG_{sender_id}",
                                 azienda_id=azienda.id,
+                                bot_attivo=True
                             )
                             db.add(contatto)
                             db.commit()
@@ -81,6 +78,11 @@ def get_instagram_routes(
                             )
                         )
                         db.commit()
+
+                        # CONTROLLO BOT ATTIVO
+                        if not contatto.bot_attivo:
+                            print(f"Bot disattivato per IG_{sender_id}.")
+                            continue
 
                         # Genera risposta con Gemini
                         risposta_ia = genera_risposta_gemini(
@@ -102,7 +104,6 @@ def get_instagram_routes(
                         )
                         db.commit()
 
-                        # Invio risposta su Instagram Direct
                         if page_access_token and instagram_account_id:
                             url = f"https://graph.facebook.com/v18.0/{instagram_account_id}/messages"
                             params = {
