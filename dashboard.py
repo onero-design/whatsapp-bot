@@ -24,7 +24,7 @@ HTML_TEMPLATE = """
         <div class="row">
             <!-- ISTRUZIONI IA -->
             <div class="col-md-5 mb-4">
-                <div class="card shadow-sm">
+                <div class="card shadow-sm mb-4">
                     <div class="card-header bg-primary text-white">
                         <h5 class="card-title mb-0">Istruzioni IA WhatsApp</h5>
                     </div>
@@ -36,10 +36,57 @@ HTML_TEMPLATE = """
                             </div>
                             <div class="mb-3">
                                 <label class="form-label">Regole, Orari e Listino Servizi</label>
-                                <textarea name="istruzioni_ia" class="form-control" rows="10" required>{{ azienda.istruzioni_ia }}</textarea>
+                                <textarea name="istruzioni_ia" class="form-control" rows="8" required>{{ azienda.istruzioni_ia }}</textarea>
                             </div>
                             <button type="submit" class="btn btn-success w-100">Salva Modifiche</button>
                         </form>
+                    </div>
+                </div>
+
+                <!-- GESTIONE CONTATTI & IA ON/OFF -->
+                <div class="card shadow-sm">
+                    <div class="card-header bg-secondary text-white">
+                        <h5 class="card-title mb-0">Gestione Bot per Contatto</h5>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-striped mb-0 align-middle">
+                                <thead>
+                                    <tr>
+                                        <th>Numero</th>
+                                        <th>Stato Bot</th>
+                                        <th>Azione</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for c in contatti %}
+                                    <tr>
+                                        <td><small>{{ c.numero_whatsapp }}</small></td>
+                                        <td>
+                                            {% if c.bot_attivo %}
+                                                <span class="badge bg-success">ATTIVO</span>
+                                            {% else %}
+                                                <span class="badge bg-danger">DISATTIVATO</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <form action="/dashboard/{{ azienda.id }}/toggle-bot/{{ c.id }}" method="post" class="m-0">
+                                                {% if c.bot_attivo %}
+                                                    <button type="submit" class="btn btn-sm btn-outline-danger">Disattiva</button>
+                                                {% else %}
+                                                    <button type="submit" class="btn btn-sm btn-outline-success">Attiva</button>
+                                                {% endif %}
+                                            </form>
+                                        </td>
+                                    </tr>
+                                    {% else %}
+                                    <tr>
+                                        <td colspan="3" class="text-center text-muted p-3">Nessun contatto salvato.</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -265,7 +312,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
-def get_dashboard_routes(get_db_func, AziendaModel):
+def get_dashboard_routes(get_db_func, AziendaModel, ContattoModel):
     @router.get("/{azienda_id}", response_class=HTMLResponse)
     def show_dashboard(request: Request, azienda_id: int, db: Session = Depends(get_db_func)):
         cookie_azienda = request.cookies.get("azienda_id")
@@ -276,8 +323,10 @@ def get_dashboard_routes(get_db_func, AziendaModel):
         if not azienda:
             return HTMLResponse(content="Azienda non trovata", status_code=404)
 
+        contatti = db.query(ContattoModel).filter(ContattoModel.azienda_id == azienda_id).all()
+
         template = Template(HTML_TEMPLATE)
-        return HTMLResponse(content=template.render(azienda=azienda))
+        return HTMLResponse(content=template.render(azienda=azienda, contatti=contatti))
 
     @router.post("/{azienda_id}/update-prompt")
     def update_prompt(request: Request, azienda_id: int, nome: str = Form(...), istruzioni_ia: str = Form(...), db: Session = Depends(get_db_func)):
@@ -290,6 +339,23 @@ def get_dashboard_routes(get_db_func, AziendaModel):
             azienda.nome = nome
             azienda.istruzioni_ia = istruzioni_ia
             db.commit()
+        return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+    @router.post("/{azienda_id}/toggle-bot/{contatto_id}")
+    def toggle_bot_contatto(request: Request, azienda_id: int, contatto_id: int, db: Session = Depends(get_db_func)):
+        cookie_azienda = request.cookies.get("azienda_id")
+        if not cookie_azienda or int(cookie_azienda) != azienda_id:
+            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+        contatto = db.query(ContattoModel).filter(
+            ContattoModel.id == contatto_id,
+            ContattoModel.azienda_id == azienda_id
+        ).first()
+
+        if contatto:
+            contatto.bot_attivo = not contatto.bot_attivo
+            db.commit()
+
         return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
 
     return router
