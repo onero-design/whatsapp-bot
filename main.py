@@ -68,6 +68,7 @@ class Contatto(Base):
     __tablename__ = "contatti"
     id = Column(Integer, primary_key=True, index=True)
     azienda_id = Column(Integer, ForeignKey("aziende.id"))
+    nome = Column(String, nullable=True)  # <-- NOME ASSEGNATO DALL'UTENTE
     numero_whatsapp = Column(String, index=True, nullable=False)
     stato = Column(String, default="Nuovo Lead")
     bot_attivo = Column(Boolean, default=True)  # <-- GESTIONE BOT ON/OFF
@@ -121,8 +122,9 @@ try:
         conn.execute(text("ALTER TABLE utenti ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
         conn.execute(text("ALTER TABLE utenti ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;"))
         
-        # Migrazione Contatto per Bot ON/OFF
+        # Migrazione Contatto per Bot ON/OFF e Nome Contatto
         conn.execute(text("ALTER TABLE contatti ADD COLUMN IF NOT EXISTS bot_attivo BOOLEAN DEFAULT TRUE;"))
+        conn.execute(text("ALTER TABLE contatti ADD COLUMN IF NOT EXISTS nome VARCHAR;"))
         conn.commit()
 except Exception as e:
     print(f"Errore durante la migrazione del DB: {e}")
@@ -299,12 +301,10 @@ async def webhook_evolution(request: Request, background_tasks: BackgroundTasks)
         target_jid = remote_jid if not participant else participant
         numero_mittente = target_jid.split("@")[0] if "@" in target_jid else target_jid
 
-        # --- CONTROLLO STATO BOT NEL DATABASE ---
-        # Si apre una sessione rapida del DB per verificare se il bot è attivo per questo specifico contatto
         if numero_mittente:
             db_session = SessionLocal()
             try:
-                contatto = db_session.query(Contatto).filter(Contatto.numero == numero_mittente).first()
+                contatto = db_session.query(Contatto).filter(Contatto.numero_whatsapp == numero_mittente).first()
                 if contatto and not contatto.bot_attivo:
                     print(f"🛑 Bot DISATTIVATO da dashboard per il contatto {numero_mittente}. Risposta ignorata.")
                     return {"status": "bot_disabled_for_contact"}
@@ -437,7 +437,7 @@ def home(request: Request, db: Session = Depends(get_db)):
     if cookie_azienda:
         return RedirectResponse(url=f"/dashboard/{cookie_azienda}", status_code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-    
+
 # --- WEBHOOK WHATSAPP (TWILIO) MULTI-AZIENDA ---
 @app.post("/whatsapp-webhook")
 async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str = Form(...), db: Session = Depends(get_db)):
