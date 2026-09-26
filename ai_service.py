@@ -27,10 +27,12 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         conversazione += f"{ruolo}: {msg.testo}\n"
 
     ora_attuale = datetime.now()
+    nome_cliente_str = contatto.nome if contatto.nome else "Cliente"
 
     prompt = (
         f"Data e Ora attuale del sistema: {ora_attuale.strftime('%d/%m/%Y alle %H:%M')} (Anno: {ora_attuale.year}).\n"
-        f"Sei l'assistente virtuale di {azienda.nome}.\n\n"
+        f"Sei l'assistente virtuale di {azienda.nome}.\n"
+        f"Stai parlando con il cliente: {nome_cliente_str}.\n\n"
         f"ISTRUZIONI E REGOLE DELL'AZIENDA (Segui attentamente le durate dei servizi indicate qui):\n"
         f"{azienda.istruzioni_ia}\n\n"
         f"REGOLE FONDAMENTALI PRENOTAZIONE:\n"
