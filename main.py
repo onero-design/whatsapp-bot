@@ -68,10 +68,10 @@ class Contatto(Base):
     __tablename__ = "contatti"
     id = Column(Integer, primary_key=True, index=True)
     azienda_id = Column(Integer, ForeignKey("aziende.id"))
-    nome = Column(String, nullable=True)  # <-- NOME ASSEGNATO DALL'UTENTE
     numero_whatsapp = Column(String, index=True, nullable=False)
+    nome = Column(String, nullable=True) # Nome / Alias modificabile dall'utente
     stato = Column(String, default="Nuovo Lead")
-    bot_attivo = Column(Boolean, default=True)  # <-- GESTIONE BOT ON/OFF
+    bot_attivo = Column(Boolean, default=True)
     creato_il = Column(DateTime, default=datetime.utcnow)
     
     azienda = relationship("Azienda", back_populates="contatti")
@@ -253,7 +253,6 @@ def elabora_e_rispondi_evolution(istanza: str, numero_cliente: str, testo_messag
         db.add(Messaggio(contatto_id=contatto.id, direzione="INBOUND", testo=testo_messaggio))
         db.commit()
 
-        # CONTROLLO BOT ATTIVO/DISATTIVATO PER QUESTO CONTATTO
         if not contatto.bot_attivo:
             print(f"Bot DISATTIVATO per il contatto {numero_cliente}. Risposta automatica saltata.")
             return
@@ -494,7 +493,7 @@ async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str
     resp = MessagingResponse()
     resp.message(risposta_ia)
     return Response(content=str(resp), media_type="application/xml")
-    
+
 class EmailSchema(BaseModel):
     to_email: EmailStr
     subject: str
