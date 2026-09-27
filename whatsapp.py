@@ -6,48 +6,145 @@ from twilio.twiml.messaging_response import MessagingResponse
 
 from ai_service import genera_risposta_gemini
 
-router = APIRouter(prefix="/whatsapp", tags=["WhatsApp"])
+router = APIRouter(tags=["WhatsApp"])
 
-def invia_messaggio_qr(azienda, numero_destinatario: str, testo: str):
-    """Invia il messaggio tramite provider QR-Code (Green-API / Evolution)."""
-    api_url = os.getenv("QR_PROVIDER_API_URL")
-    api_key = os.getenv("QR_PROVIDER_API_KEY")
+def invia_messaggio_evolution(numero_destinatario: str, testo: str):
+    """Invia il messaggio di risposta tramite Evolution API."""
+    evolution_url = os.getenv("EVOLUTION_URL", "https://evolution-api-4qd9.onrender.com")
+    api_key = os.getenv("EVOLUTION_API_KEY")
+    instance_name = os.getenv("EVOLUTION_INSTANCE_NAME", "default")
 
-    if not api_url or not api_key:
-        print("Errore: Credenziali QR Provider mancanti nelle variabili d'ambiente.")
+    if not api_key:
+        print("Errore: EVOLUTION_API_KEY non trovata nelle variabili d'ambiente.")
         return
 
-    clean_number = numero_destinatario.replace("whatsapp:", "").replace("+", "").strip()
-    payload = {
-        "chatId": f"{clean_number}@c.us",
-        "message": testo
-    }
-    headers = {"Content-Type": "application/json"}
+    clean_number = numero_destinatario.replace("whatsapp:", "").replace("+", "").split("@")[0].strip()
     
+    url = f"{evolution_url.rstrip('/')}/message/sendText/{instance_name}"
+    headers = {
+        "apikey": api_key,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "number": clean_number,
+        "options": {
+            "delay": 1200,
+            "presence": "composing",
+            "linkPreview": False
+        },
+        "textMessage": {
+            "text": testo
+        }
+    }
+
     try:
-        url_invio = f"{api_url.rstrip('/')}/sendMessage/{api_key}"
-        requests.post(url_invio, json=payload, headers=headers, timeout=10)
+        res = requests.post(url, json=payload, headers=headers, timeout=10)
+        print(f"Risposta invio Evolution API ({res.status_code}): {res.text}")
     except Exception as e:
-        print(f"Errore invio QR Provider: {e}")
+        print(f"Errore invio tramite Evolution API: {e}")
 
 
 def get_whatsapp_routes(get_db_func, AziendaModel, ContattoModel, MessaggioModel, SlotAgendaModel):
 
-    # --- WEBHOOK TWILIO ---
+    # --- WEBHOOK EVOLUTION API ---
+    @router.post("/webhook/evolution")
     @router.post("/webhook")
+    async def evolution_webhook(request: Request, db: Session = Depends(get_db_func)):
+        try:
+            data = await request.json()
+        except Exception:
+            return {"status": "error", "message": "Payload JSON non valido"}
+
+        event = data.get("event")
+        print(f"Ricevuto evento Webhook: {event}")
+
+        # Filtra solo i messaggi in ingresso (MESSAGES_UPSERT)
+        if event and event != "MESSAGES_UPSERT":
+            return {"status": "ignored", "reason": f"Evento {event} ignorato"}
+
+        data_payload = data.get("data", {})
+        key_data = data_payload.get("key", {})
+
+        # Ignora i messaggi inviati dal bot stesso (fromMe = True)
+        if key_data.get("fromMe", False):
+            return {"status": "ignored", "reason": "Messaggio inviato dal bot"}
+
+        # Estrazione dati del mittente e del testo
+        remote_jid = key_data.get("remoteJid", "")
+        numero_cliente_clean = remote_jid.split("@")[0].replace("+", "").strip()
+
+        message_content = data_payload.get("message", {})
+        messaggio_utente = (
+            message_content.get("conversation") or 
+            message_content.get("extendedTextMessage", {}).get("text") or 
+            ""
+        ).strip()
+
+        if not numero_cliente_clean or not messaggio_utente:
+            return {"status": "ignored", "reason": "Dati messaggio o numero mancanti"}
+
+        # Ricerca azienda di riferimento
+        azienda = db.query(AziendaModel).first()
+        if not azienda:
+            return {"status": "error", "message": "Nessuna azienda configurata nel database"}
+
+        # Ricerca o creazione del contatto
+        contatto = db.query(ContattoModel).filter(
+            ContattoModel.numero_whatsapp == numero_cliente_clean,
+            ContattoModel.azienda_id == azienda.id
+        ).first()
+
+        if not contatto:
+            contatto = ContattoModel(
+                numero_whatsapp=numero_cliente_clean, 
+                azienda_id=azienda.id, 
+                bot_attivo=True
+            )
+            db.add(contatto)
+            db.commit()
+            db.refresh(contatto)
+
+        # Registrazione messaggio INBOUND
+        db.add(MessaggioModel(contatto_id=contatto.id, direzione="INBOUND", testo=messaggio_utente))
+        db.commit()
+
+        # Controllo se il bot è disattivato per questo contatto
+        if not contatto.bot_attivo:
+            print(f"Bot disattivato per il contatto {numero_cliente_clean}.")
+            return {"status": "success", "message": "Bot disattivato per il contatto"}
+
+        # Generazione risposta con AI
+        try:
+            risposta_ia = genera_risposta_gemini(azienda, contatto, messaggio_utente, db, SlotAgendaModel, MessaggioModel)
+        except Exception as e:
+            print(f"Errore nella generazione risposta AI: {e}")
+            risposta_ia = "Ci dispiace, si è verificato un errore momentaneo. Riprova tra poco."
+
+        # Registrazione messaggio OUTBOUND
+        db.add(MessaggioModel(contatto_id=contatto.id, direzione="OUTBOUND", testo=risposta_ia))
+        db.commit()
+
+        # Invio risposta tramite Evolution API
+        invia_messaggio_evolution(numero_cliente_clean, risposta_ia)
+
+        return {"status": "success"}
+
+
+    # --- WEBHOOK TWILIO (Fallback) ---
+    @router.post("/whatsapp/webhook")
     async def whatsapp_twilio_webhook(
         From: str = Form(...), 
         To: str = Form(...), 
         Body: str = Form(...), 
         db: Session = Depends(get_db_func)
     ):
-        numero_cliente = From
-        numero_business = To
+        numero_cliente = From.replace("whatsapp:", "").strip()
         messaggio_utente = Body.strip()
 
-        azienda = db.query(AziendaModel).filter(AziendaModel.numero_whatsapp_business == numero_business).first()
+        azienda = db.query(AziendaModel).first()
         if not azienda:
-            azienda = db.query(AziendaModel).first()
+            resp = MessagingResponse()
+            return Response(content=str(resp), media_type="application/xml")
 
         contatto = db.query(ContattoModel).filter(
             ContattoModel.numero_whatsapp == numero_cliente,
@@ -63,9 +160,7 @@ def get_whatsapp_routes(get_db_func, AziendaModel, ContattoModel, MessaggioModel
         db.add(MessaggioModel(contatto_id=contatto.id, direzione="INBOUND", testo=messaggio_utente))
         db.commit()
 
-        # CONTROLLO BOT ATTIVO
         if not contatto.bot_attivo:
-            print(f"Bot disattivato per {numero_cliente}. Nessuna risposta generata.")
             resp = MessagingResponse()
             return Response(content=str(resp), media_type="application/xml")
 
@@ -80,63 +175,5 @@ def get_whatsapp_routes(get_db_func, AziendaModel, ContattoModel, MessaggioModel
         resp = MessagingResponse()
         resp.message(risposta_ia)
         return Response(content=str(resp), media_type="application/xml")
-
-
-    # --- WEBHOOK QR-CODE ---
-    @router.post("/qr-webhook")
-    async def whatsapp_qr_webhook(request: Request, db: Session = Depends(get_db_func)):
-        try:
-            data = await request.json()
-        except Exception:
-            return {"status": "error", "message": "Payload JSON non valido"}
-        
-        numero_cliente = data.get("sender") or data.get("from") or data.get("chatId")
-        numero_business = data.get("instance_number") or data.get("to") or data.get("receiver")
-        messaggio_utente = (data.get("message") or data.get("body") or "").strip()
-
-        if not numero_cliente or not messaggio_utente:
-            return {"status": "ignored"}
-
-        numero_cliente_clean = numero_cliente.split("@")[0].replace("whatsapp:", "").replace("+", "")
-        
-        azienda = None
-        if numero_business:
-            azienda = db.query(AziendaModel).filter(AziendaModel.numero_whatsapp_business.contains(numero_business)).first()
-        if not azienda:
-            azienda = db.query(AziendaModel).first()
-
-        if not azienda:
-            return {"status": "error", "message": "Azienda non trovata"}
-
-        contatto = db.query(ContattoModel).filter(
-            ContattoModel.numero_whatsapp == numero_cliente_clean,
-            ContattoModel.azienda_id == azienda.id
-        ).first()
-
-        if not contatto:
-            contatto = ContattoModel(numero_whatsapp=numero_cliente_clean, azienda_id=azienda.id, bot_attivo=True)
-            db.add(contatto)
-            db.commit()
-            db.refresh(contatto)
-
-        db.add(MessaggioModel(contatto_id=contatto.id, direzione="INBOUND", testo=messaggio_utente))
-        db.commit()
-
-        # CONTROLLO BOT ATTIVO
-        if not contatto.bot_attivo:
-            print(f"Bot disattivato per {numero_cliente_clean}. Ignoro la risposta.")
-            return {"status": "success", "message": "Bot disattivato per questo contatto"}
-
-        try:
-            risposta_ia = genera_risposta_gemini(azienda, contatto, messaggio_utente, db, SlotAgendaModel, MessaggioModel)
-        except Exception as e:
-            print(f"Errore Gemini: {e}")
-            risposta_ia = "Si è verificato un errore momentaneo."
-
-        db.add(MessaggioModel(contatto_id=contatto.id, direzione="OUTBOUND", testo=risposta_ia))
-        db.commit()
-
-        invia_messaggio_qr(azienda, numero_cliente_clean, risposta_ia)
-        return {"status": "success"}
 
     return router
