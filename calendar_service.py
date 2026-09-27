@@ -14,7 +14,7 @@ def get_calendar_service(access_token: str, refresh_token: str, client_id: str, 
     return build("calendar", "v3", credentials=creds)
 
 def parse_to_iso_with_tz(data_ora_iso: str) -> str:
-    """Garantisce il formato ISO8601 corretto con offset fuso orario italiano (+02:00 / +01:00)."""
+    """Garantisce il formato ISO8601 corretto senza spezzare l'ora o causare eccezioni Google API."""
     clean_str = str(data_ora_iso).strip().replace("Z", "")
     if "T" not in clean_str and " " in clean_str:
         clean_str = clean_str.replace(" ", "T")
@@ -23,29 +23,26 @@ def parse_to_iso_with_tz(data_ora_iso: str) -> str:
     if len(parts) == 2 and parts[1].count(":") == 1:
         clean_str = f"{parts[0]}T{parts[1]}:00"
     
-    # Prendiamo solo YYYY-MM-DDTHH:MM:SS ignorando eventuali vecchi offset
     base_iso = clean_str[:19]
     dt = datetime.fromisoformat(base_iso)
     
-    # Calcolo se siamo in ora legale (+02:00) o solare (+01:00) in Italia
-    # In Settembre siamo in Ora Legale (+02:00)
-    return dt.strftime("%Y-%m-%dT%H:%M:%S") + "+02:00"
+    # Restituiamo il formato ISO leggibile da Google Calendar con fuso orario di Roma
+    return dt.strftime("%Y-%m-%dT%H:%M:%S")
 
 def verifica_disponibilita_calendar(service, calendar_id: str, data_ora_iso: str, durata_minuti: int = 30) -> bool:
     try:
         iso_inizio = parse_to_iso_with_tz(data_ora_iso)
         dt_inizio = datetime.fromisoformat(iso_inizio)
         dt_fine = dt_inizio + timedelta(minutes=int(durata_minuti))
-        iso_fine = dt_fine.strftime("%Y-%m-%dT%H:%M:%S") + "+02:00"
 
-        # Finestra di controllo ampia attorno all'orario richiesto
-        check_start = (dt_inizio - timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%S") + "+02:00"
-        check_end = (dt_fine + timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%S") + "+02:00"
+        # Finestra di controllo
+        time_min = (dt_inizio - timedelta(hours=1)).isoformat() + "Z"
+        time_max = (dt_fine + timedelta(hours=1)).isoformat() + "Z"
 
         events_result = service.events().list(
             calendarId=calendar_id,
-            timeMin=check_start,
-            timeMax=check_end,
+            timeMin=time_min,
+            timeMax=time_max,
             singleEvents=True,
             timeZone='Europe/Rome',
             orderBy="startTime"
@@ -58,17 +55,19 @@ def verifica_disponibilita_calendar(service, calendar_id: str, data_ora_iso: str
             end_raw = event.get('end', {}).get('dateTime') or event.get('end', {}).get('date')
             
             if start_raw and end_raw:
-                if len(start_raw) == 10: start_raw += "T00:00:00+02:00"
-                if len(end_raw) == 10: end_raw += "T23:59:59+02:00"
+                if len(start_raw) == 10:
+                    start_raw += "T00:00:00"
+                if len(end_raw) == 10:
+                    end_raw += "T23:59:59"
 
-                ev_start = datetime.fromisoformat(start_raw)
-                ev_end = datetime.fromisoformat(end_raw)
+                ev_start = datetime.fromisoformat(start_raw[:19])
+                ev_end = datetime.fromisoformat(end_raw[:19])
 
-                # Sovrapposizione: (NuovoInizio < FineEsistente) E (NuovaFine > InizioEsistente)
+                # Controllo sovrapposizione
                 if dt_inizio < ev_end and dt_fine > ev_start:
-                    return False # Occupato!
+                    return False # Occupato
 
-        return True # Libero!
+        return True # Libero
     except Exception as e:
         print(f"Errore verifica_disponibilita_calendar: {e}")
         return True
@@ -77,17 +76,16 @@ def inserisci_evento_calendar(service, calendar_id: str, summary: str, descripti
     iso_inizio = parse_to_iso_with_tz(data_ora_iso)
     dt_inizio = datetime.fromisoformat(iso_inizio)
     dt_fine = dt_inizio + timedelta(minutes=int(durata_minuti))
-    iso_fine = dt_fine.strftime("%Y-%m-%dT%H:%M:%S") + "+02:00"
 
     event = {
         'summary': summary,
         'description': description,
         'start': {
-            'dateTime': iso_inizio,
+            'dateTime': dt_inizio.isoformat(),
             'timeZone': 'Europe/Rome',
         },
         'end': {
-            'dateTime': iso_fine,
+            'dateTime': dt_fine.isoformat(),
             'timeZone': 'Europe/Rome',
         },
     }
