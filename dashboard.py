@@ -18,7 +18,16 @@ HTML_TEMPLATE = """
     <div class="container py-5">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h1>Pannello di Controllo - {{ azienda.nome }}</h1>
-            <a href="/logout" class="btn btn-outline-danger">Esci (Logout)</a>
+            <div>
+                <a href="/auth/google/login?azienda_id={{ azienda.id }}" class="btn btn-outline-primary me-2">
+                    {% if azienda.google_access_token %}
+                        ✅ Google Calendar Collegato
+                    {% else %}
+                        📅 Collega Google Calendar
+                    {% endif %}
+                </a>
+                <a href="/logout" class="btn btn-outline-danger">Esci (Logout)</a>
+            </div>
         </div>
         
         <div class="row">
@@ -43,38 +52,32 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
 
-                <!-- AGGIUNGI NUOVO CONTATTO MANUALE -->
-                <div class="card shadow-sm mb-4">
-                    <div class="card-header bg-dark text-white">
-                        <h5 class="card-title mb-0">➕ Aggiungi Nuovo Contatto</h5>
-                    </div>
-                    <div class="card-body">
-                        <form action="/dashboard/{{ azienda.id }}/add-contact" method="post" class="row g-2">
-                            <div class="col-md-6">
-                                <input type="text" name="nome" class="form-control form-control-sm" placeholder="Nome (es. Luca)" required>
-                            </div>
-                            <div class="col-md-6">
-                                <input type="text" name="numero_whatsapp" class="form-control form-control-sm" placeholder="Numero (es. 393331234567)" required>
-                            </div>
-                            <div class="col-12 mt-2">
-                                <button type="submit" class="btn btn-sm btn-primary w-100">+ Salva Contatto</button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-
                 <!-- GESTIONE CONTATTI & IA ON/OFF -->
-                <div class="card shadow-sm">
+                <div class="card shadow-sm mb-4">
                     <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
                         <h5 class="card-title mb-0">Gestione Bot per Contatto</h5>
-                        <span class="badge bg-light text-dark">Totale: {{ contatti|length }}</span>
+                        <button class="btn btn-sm btn-light" data-bs-toggle="collapse" data-bs-target="#addContactForm">+ Aggiungi Numero</button>
+                    </div>
+                    <div class="card-body p-3 border-bottom collapse" id="addContactForm">
+                        <h6>Aggiungi Nuovo Contatto</h6>
+                        <form action="/dashboard/{{ azienda.id }}/add-contact" method="post" class="row g-2">
+                            <div class="col-6">
+                                <input type="text" name="numero_whatsapp" class="form-control form-control-sm" placeholder="Es. +393331234567" required>
+                            </div>
+                            <div class="col-6">
+                                <input type="text" name="nome" class="form-control form-control-sm" placeholder="Nome/Etichetta (es. Luca)">
+                            </div>
+                            <div class="col-12 text-end">
+                                <button type="submit" class="btn btn-sm btn-primary">+ Salva Contatto</button>
+                            </div>
+                        </form>
                     </div>
                     <div class="card-body p-0">
                         <div class="table-responsive">
                             <table class="table table-striped mb-0 align-middle">
                                 <thead>
                                     <tr>
-                                        <th>Nome / Numero</th>
+                                        <th>Contatto / Numero</th>
                                         <th>Stato Bot</th>
                                         <th>Azione</th>
                                     </tr>
@@ -83,11 +86,12 @@ HTML_TEMPLATE = """
                                     {% for c in contatti %}
                                     <tr>
                                         <td>
-                                            <form action="/dashboard/{{ azienda.id }}/update-contact-name/{{ c.id }}" method="post" class="d-flex gap-1 align-items-center mb-1">
-                                                <input type="text" name="nome" class="form-control form-control-sm" value="{{ c.nome or '' }}" placeholder="Nome (es. Luca)">
-                                                <button type="submit" class="btn btn-sm btn-outline-secondary" title="Salva Nome">💾</button>
+                                            <form action="/dashboard/{{ azienda.id }}/update-contact/{{ c.id }}" method="post" class="d-flex align-items-center gap-1">
+                                                <input type="text" name="nome" class="form-control form-control-sm border-0 bg-transparent fw-bold p-0" value="{{ c.nome if c.nome else 'Senza Nome' }}" placeholder="Rinomina...">
+                                                <br>
+                                                <small class="text-muted">({{ c.numero_whatsapp }})</small>
+                                                <button type="submit" class="btn btn-sm btn-link p-0 text-decoration-none" title="Salva Nome">💾</button>
                                             </form>
-                                            <small class="text-muted">{{ c.numero_whatsapp }}</small>
                                         </td>
                                         <td>
                                             {% if c.bot_attivo %}
@@ -180,6 +184,7 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
     async function generaBozzaEmail() {
         const targetEl = document.getElementById("targetInfo");
@@ -368,6 +373,51 @@ def get_dashboard_routes(get_db_func, AziendaModel, ContattoModel):
             db.commit()
         return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
 
+    @router.post("/{azienda_id}/add-contact")
+    def add_contact(request: Request, azienda_id: int, numero_whatsapp: str = Form(...), nome: str = Form(None), db: Session = Depends(get_db_func)):
+        cookie_azienda = request.cookies.get("azienda_id")
+        if not cookie_azienda or int(cookie_azienda) != azienda_id:
+            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+        clean_number = numero_whatsapp.strip().replace(" ", "")
+        
+        contatto = db.query(ContattoModel).filter(
+            ContattoModel.numero_whatsapp == clean_number,
+            ContattoModel.azienda_id == azienda_id
+        ).first()
+
+        if not contatto:
+            contatto = ContattoModel(
+                numero_whatsapp=clean_number,
+                nome=nome.strip() if nome else None,
+                azienda_id=azienda_id,
+                bot_attivo=True
+            )
+            db.add(contatto)
+        else:
+            if nome:
+                contatto.nome = nome.strip()
+
+        db.commit()
+        return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+    @router.post("/{azienda_id}/update-contact/{contatto_id}")
+    def update_contact(request: Request, azienda_id: int, contatto_id: int, nome: str = Form(...), db: Session = Depends(get_db_func)):
+        cookie_azienda = request.cookies.get("azienda_id")
+        if not cookie_azienda or int(cookie_azienda) != azienda_id:
+            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+        contatto = db.query(ContattoModel).filter(
+            ContattoModel.id == contatto_id,
+            ContattoModel.azienda_id == azienda_id
+        ).first()
+
+        if contatto:
+            contatto.nome = nome.strip() if nome else None
+            db.commit()
+
+        return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
+
     @router.post("/{azienda_id}/toggle-bot/{contatto_id}")
     def toggle_bot_contatto(request: Request, azienda_id: int, contatto_id: int, db: Session = Depends(get_db_func)):
         cookie_azienda = request.cookies.get("azienda_id")
@@ -383,50 +433,6 @@ def get_dashboard_routes(get_db_func, AziendaModel, ContattoModel):
             contatto.bot_attivo = not contatto.bot_attivo
             db.commit()
 
-        return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
-
-    @router.post("/{azienda_id}/update-contact-name/{contatto_id}")
-    def update_contact_name(request: Request, azienda_id: int, contatto_id: int, nome: str = Form(""), db: Session = Depends(get_db_func)):
-        cookie_azienda = request.cookies.get("azienda_id")
-        if not cookie_azienda or int(cookie_azienda) != azienda_id:
-            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-
-        contatto = db.query(ContattoModel).filter(
-            ContattoModel.id == contatto_id,
-            ContattoModel.azienda_id == azienda_id
-        ).first()
-
-        if contatto:
-            contatto.nome = nome.strip()
-            db.commit()
-
-        return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
-
-    @router.post("/{azienda_id}/add-contact")
-    def add_contact(request: Request, azienda_id: int, nome: str = Form(...), numero_whatsapp: str = Form(...), db: Session = Depends(get_db_func)):
-        cookie_azienda = request.cookies.get("azienda_id")
-        if not cookie_azienda or int(cookie_azienda) != azienda_id:
-            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-
-        clean_number = numero_whatsapp.replace("whatsapp:", "").replace("+", "").replace(" ", "").strip()
-        
-        contatto_esistente = db.query(ContattoModel).filter(
-            ContattoModel.numero_whatsapp == clean_number,
-            ContattoModel.azienda_id == azienda_id
-        ).first()
-
-        if contatto_esistente:
-            contatto_esistente.nome = nome.strip()
-        else:
-            nuovo_contatto = ContattoModel(
-                azienda_id=azienda_id,
-                nome=nome.strip(),
-                numero_whatsapp=clean_number,
-                bot_attivo=True
-            )
-            db.add(nuovo_contatto)
-        
-        db.commit()
         return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
 
     return router
