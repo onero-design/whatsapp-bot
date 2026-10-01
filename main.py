@@ -592,22 +592,27 @@ def setup_admin(db: Session = Depends(get_db)):
 
 
 
-
-
 # ==========================================
-# TEMPORANEO: CREAZIONE TABELLE + SUPER ADMIN DA ENV
+# TEMPORANEO: CREAZIONE TABELLE + SUPER ADMIN
 # ==========================================
 import os
-from database import engine, Base, SessionLocal
-from models import User
-from auth import get_password_hash
 
 @app.on_event("startup")
 def init_db_and_admin_once():
+    # Usiamo gli import già esistenti nel progetto
+    try:
+        from database import engine, Base, SessionLocal
+        from models import User
+        from auth import get_password_hash
+    except ModuleNotFoundError:
+        # Se il progetto usa la struttura con cartella principale/app
+        from app.database import engine, Base, SessionLocal
+        from app.models import User
+        from app.auth import get_password_hash
+
     print("🔨 CREAZIONE TABELLE IN CORSO...")
     Base.metadata.create_all(bind=engine)
     
-    # Legge email e password dalle variabili d'ambiente di Render
     admin_email = os.getenv("ADMIN_EMAIL")
     admin_password = os.getenv("ADMIN_PASSWORD")
 
