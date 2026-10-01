@@ -75,7 +75,7 @@ class Contatto(Base):
     creato_il = Column(DateTime, default=datetime.utcnow)
     
     azienda = relationship("Azienda", back_populates="contatti")
-    messaggi = relationship("Messaggio", back_populates="azienda")
+    messaggi = relationship("Messaggio", back_populates="contatto")
 
 class Messaggio(Base):
     __tablename__ = "messaggi"
@@ -231,7 +231,6 @@ def elabora_e_rispondi_evolution(istanza: str, numero_cliente: str, testo_messag
     from ai_service import genera_risposta_gemini
     db = SessionLocal()
     try:
-        # Cerca l'azienda per corrispondenza esatta del nome istanza
         azienda = db.query(Azienda).filter(Azienda.instance_name == istanza).first()
 
         if not azienda:
@@ -514,11 +513,22 @@ def setup_admin(db: Session = Depends(get_db)):
             istruzioni_ia="Azienda Amministratore SaaS"
         )
         db.add(azienda_admin)
-    
-    # 2. Assegna l'istanza 'barberia' all'Azienda BarberShop (ID 2)
+        db.commit()
+        db.refresh(azienda_admin)
+
+    # 2. Ricerca flessibile per la Barberia e assegnazione di 'barberia'
     azienda_barberia = db.query(Azienda).filter(Azienda.id == 2).first()
+    if not azienda_barberia:
+        azienda_barberia = db.query(Azienda).filter(Azienda.nome.ilike("%barberia%")).first()
+    if not azienda_barberia:
+        aziende_tutte = db.query(Azienda).all()
+        if len(aziende_tutte) > 1:
+            azienda_barberia = aziende_tutte[1]
+
+    nome_azienda_aggiornata = "Nessuna trovata"
     if azienda_barberia:
         azienda_barberia.instance_name = "barberia"
+        nome_azienda_aggiornata = azienda_barberia.nome
 
     # 3. Configura Utente Admin
     utente = db.query(Utente).filter(Utente.email == admin_email).first()
@@ -537,4 +547,7 @@ def setup_admin(db: Session = Depends(get_db)):
         utente.is_active = True
     
     db.commit()
-    return {"status": "ok", "message": "Database aggiornato: Istanza 'barberia' collegata all'Azienda 2!"}
+    return {
+        "status": "ok", 
+        "message": f"Database aggiornato! Istanza 'barberia' assegnata all'azienda: '{nome_azienda_aggiornata}' (ID: {azienda_barberia.id if azienda_barberia else 'N/A'})"
+    }
