@@ -46,51 +46,32 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         "Assistente:"
     )
 
-    def parse_dt(dt_str: str) -> datetime:
-        clean = str(dt_str).strip().replace("Z", "")
+    def normalizza_data_iso(data_ora_str: str) -> str:
+        clean = str(data_ora_str).strip().replace("Z", "")
         if "T" not in clean and " " in clean:
             clean = clean.replace(" ", "T")
         parts = clean.split("T")
-        if len(parts) == 2 and parts[1].count(":") == 1:
-            clean = f"{parts[0]}T{parts[1]}:00"
-        return datetime.fromisoformat(clean)
+        if len(parts) == 2:
+            time_part = parts[1]
+            if time_part.count(":") == 1:
+                clean = f"{parts[0]}T{time_part}:00"
+        return clean
 
-    def normalizza_data_iso(data_ora_str: str) -> str:
-        dt = parse_dt(data_ora_str)
-        return dt.strftime("%Y-%m-%dT%H:%M:%S")
-
-    # --- TOOLS CON CONTROLLO SOVRAPPOSIZIONE TEMPORALE ---
+    # --- TOOLS CON DURATA DINAMICA ---
     def controlla_orario_disponibile(data_ora_iso: str, durata_minuti: int = 30) -> str:
         """Verifica se uno slot è libero sul Google Calendar e DB. Parametri: data_ora_iso (YYYY-MM-DDTHH:MM:SS), durata_minuti (int, es. 25, 40)."""
         data_ora_iso = normalizza_data_iso(data_ora_iso)
         durata = int(durata_minuti)
         
-        req_start = parse_dt(data_ora_iso)
-        req_end = req_start + timedelta(minutes=durata)
-
-        # 1. Controllo DB locale con gestione dell'intervallo temporale
-        occupati_db = db_session.query(SlotAgenda).filter(
+        # 1. Controllo DB locale
+        slot_occupato = db_session.query(SlotAgenda).filter(
             SlotAgenda.azienda_id == azienda.id,
-            SlotAgenda.stato == "Occupato"
-        ).all()
+            SlotAgenda.stato == "Occupato",
+            SlotAgenda.data_ora.in_([data_ora_iso, data_ora_iso.replace("T", " "), data_ora_iso[:16]])
+        ).first()
 
-        for slot in occupati_db:
-            try:
-                slot_start = parse_dt(slot.data_ora)
-                # Recupera la durata registrata nel nome servizio o usa 30 min di default
-                slot_dur = 30
-                if "(" in str(slot.servizio) and "min)" in str(slot.servizio):
-                    try:
-                        slot_dur = int(slot.servizio.split("(")[1].split("min)")[0].strip())
-                    except Exception:
-                        pass
-                slot_end = slot_start + timedelta(minutes=slot_dur)
-
-                # Verifica se gli intervalli si sovrappongono: (StartA < EndB) e (EndA > StartB)
-                if req_start < slot_end and req_end > slot_start:
-                    return f"ORARIO OCCUPATO: L'orario {data_ora_iso} per {durata} minuti si sovrappone a un altro appuntamento nel DB (dalle {slot_start.strftime('%H:%M')} alle {slot_end.strftime('%H:%M')}). Proponi un altro orario."
-            except Exception as e:
-                print(f"Errore parsing slot DB: {e}")
+        if slot_occupato:
+            return f"ORARIO OCCUPATO: L'orario {data_ora_iso} è occupato nel DB. Proponi un altro orario."
 
         # 2. Controllo Google Calendar
         if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
