@@ -588,3 +588,52 @@ def setup_admin(db: Session = Depends(get_db)):
     
     db.commit()
     return {"status": "ok", "message": f"Admin configurato con successo per: {admin_email}"}
+
+
+
+
+
+
+# ==========================================
+# TEMPORANEO: CREAZIONE TABELLE + SUPER ADMIN DA ENV
+# ==========================================
+import os
+from database import engine, Base, SessionLocal
+from models import User
+from auth import get_password_hash
+
+@app.on_event("startup")
+def init_db_and_admin_once():
+    print("🔨 CREAZIONE TABELLE IN CORSO...")
+    Base.metadata.create_all(bind=engine)
+    
+    # Legge email e password dalle variabili d'ambiente di Render
+    admin_email = os.getenv("ADMIN_EMAIL")
+    admin_password = os.getenv("ADMIN_PASSWORD")
+
+    if not admin_email or not admin_password:
+        print("⚠️ ADMIN_EMAIL o ADMIN_PASSWORD non trovate nelle variabili d'ambiente!")
+        return
+
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.email == admin_email).first()
+        if not admin:
+            admin = User(
+                email=admin_email,
+                hashed_password=get_password_hash(admin_password),
+                is_admin=True,
+                is_active=True,
+                company_name="Super Admin"
+            )
+            db.add(admin)
+            db.commit()
+            print(f"✅ TABELLE CREATE E SUPER ADMIN CREATO ({admin_email})!")
+        else:
+            print(f"ℹ️ Super Admin ({admin_email}) già esistente.")
+    except Exception as e:
+        print(f"🔴 Errore durante l'inizializzazione del DB: {e}")
+        db.rollback()
+    finally:
+        db.close()
+# ==========================================
