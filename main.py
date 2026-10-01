@@ -502,8 +502,11 @@ def setup_admin(db: Session = Depends(get_db)):
     admin_email = os.getenv("ADMIN_EMAIL", "admin@iltuosaas.it")
     admin_pass = os.getenv("ADMIN_PASSWORD", "AdminPasswordSicura123!")
     
-    azienda_admin = db.query(Azienda).filter(Azienda.nome == "SaaS Management").first()
-    if not azienda_admin:
+    # 1. Configura Azienda Admin (ID 1)
+    azienda_admin = db.query(Azienda).filter(Azienda.id == 1).first()
+    if azienda_admin:
+        azienda_admin.instance_name = "saas-management"
+    else:
         azienda_admin = Azienda(
             nome="SaaS Management",
             instance_name="saas-management",
@@ -511,15 +514,19 @@ def setup_admin(db: Session = Depends(get_db)):
             istruzioni_ia="Azienda Amministratore SaaS"
         )
         db.add(azienda_admin)
-        db.commit()
-        db.refresh(azienda_admin)
+    
+    # 2. Assegna l'istanza 'barberia' all'Azienda BarberShop (ID 2)
+    azienda_barberia = db.query(Azienda).filter(Azienda.id == 2).first()
+    if azienda_barberia:
+        azienda_barberia.instance_name = "barberia"
 
+    # 3. Configura Utente Admin
     utente = db.query(Utente).filter(Utente.email == admin_email).first()
     if not utente:
         utente = Utente(
             email=admin_email,
             password_hash=genera_hash_password(admin_pass),
-            azienda_id=azienda_admin.id,
+            azienda_id=azienda_admin.id if azienda_admin else 1,
             is_active=True,
             is_admin=True
         )
@@ -530,4 +537,4 @@ def setup_admin(db: Session = Depends(get_db)):
         utente.is_active = True
     
     db.commit()
-    return {"status": "ok", "message": f"Admin configurato con successo per: {admin_email}"}
+    return {"status": "ok", "message": "Database aggiornato: Istanza 'barberia' collegata all'Azienda 2!"}
