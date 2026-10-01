@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-from calendar_service import get_calendar_service, verifica_disponibilita_calendar, inserisci_evento_calendar
+from calendar_service import (
+    get_calendar_service, 
+    verifica_disponibilita_calendar, 
+    inserisci_evento_calendar,
+    cancella_evento_calendar
+)
 
 def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session: Session, SlotAgenda, Messaggio) -> str:
     if not client:
@@ -33,16 +38,16 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         f"Data e Ora attuale del sistema: {ora_attuale.strftime('%d/%m/%Y alle %H:%M')} (Anno: {ora_attuale.year}).\n"
         f"Sei l'assistente virtuale di {azienda.nome}.\n"
         f"Stai parlando con il cliente: {nome_cliente_str}.\n\n"
-        f"ISTRUZIONI E REGOLE DELL'AZIENDA (Segui attentamente le durate e gli orari indicati qui):\n"
+        f"ISTRUZIONI E REGOLE DELL'AZIENDA (Orari e listino):\n"
         f"{azienda.istruzioni_ia}\n\n"
-        f"REGOLE FONDAMENTALI PRENOTAZIONE:\n"
-        f"1. In base al servizio richiesto dal cliente e alle istruzioni aziendali, STIMA LA DURATA IN MINUTI (es. 15, 25, 30, 45, 60 minuti).\n"
-        f"2. PRIMA di confermare o registrare, chiama SEMPRE `controlla_orario_disponibile(data_ora_iso, durata_minuti)`.\n"
-        f"3. Se il controllo risponde che l'orario è OCCUPATO, NON PRENOTARE! Informa il cliente che l'orario si sovrappone a un altro appuntamento e proponi un'alternativa.\n"
+        f"REGOLE FONDAMENTALI PRENOTAZIONE E DISDETTA:\n"
+        f"1. In base al servizio richiesto, STIMA LA DURATA IN MINUTI (es. 25, 30, 45, 60 minuti).\n"
+        f"2. PRIMA di proporre o confermare QUALSIASI orario, chiama SEMPRE `controlla_orario_disponibile(data_ora_iso, durata_minuti)` per verificare che sia davvero libero! NON INVENTARE O SUGGERIRE MAI ORARI SENZA AVERLI PRIMA VERIFICATI CON IL TOOL!\n"
+        f"3. Se il controllo risponde che l'orario è OCCUPATO, NON PRENOTARE! Proponi solo orari che hai già verificato essere LIBERI.\n"
         f"4. Solo se LIBERO, chiama `conferma_e_prenota_appuntamento(data_ora_iso, servizio, nome_cliente, durata_minuti)`.\n"
-        f"5. Formato data/ora: YYYY-MM-DDTHH:MM:SS.\n"
-        f"6. RISPETTA RIGOROSAMENTE GLI ORARI DI APERTURA E CHIUSURA: Non prenotare MAI nei giorni di chiusura o ad orari al di fuori della fascia lavorativa.\n"
-        f"7. L'APPUNTAMENTO DEVE FINIRE ENTRO L'ORARIO DI CHIUSURA: Calcola sempre `orario_inizio + durata_minuti`. Se il risultato supera l'orario di chiusura dell'attività (es. orario richiesto 20:10, o 19:45 con 25 min di durata per una chiusura alle 20:00), RIFIUTA L'ORARIO a monte e spiega al cliente che l'attività sarà già chiusa, proponendo uno slot antecedente o per un altro giorno.\n\n"
+        f"5. SE IL CLIENTE VUOLE DISDIRE/ANNULLARE UN APPUNTAMENTO: Chiama IMMEDIATAMENTE il tool `cancella_appuntamento(data_ora_iso)`. NON confermare la disdetta a parole senza aver eseguito la chiamata al tool!\n"
+        f"6. Formato data/ora per i tool: YYYY-MM-DDTHH:MM:SS.\n"
+        f"7. ORARI DI CHIUSURA: L'appuntamento deve terminare prima della chiusura. Se chiudiamo alle 20:00 e il servizio dura 25 min, l'ultimo orario accettabile è le 19:30. Rifiuta qualsiasi richiesta oltre l'orario di chiusura o nei giorni di chiusura.\n\n"
         f"CRONOLOGIA CHAT:\n{conversazione}"
         f"Cliente: {messaggio_attuale}\n"
         "Assistente:"
@@ -66,13 +71,13 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         except Exception:
             return None
 
-    # --- TOOLS CON CONTROLLO SOVRAPPOSIZIONI SICURO ---
+    # --- TOOLS DI AI SERVICE ---
     def controlla_orario_disponibile(data_ora_iso: str, durata_minuti: int) -> str:
-        """Verifica se uno slot è libero sia sul Database locale che su Google Calendar per la durata indicata.
+        """Verifica se uno slot è libero sul DB locale e su Google Calendar per la durata indicata.
         
         Args:
-            data_ora_iso: Data e ora in formato ISO (es. 2026-10-01T19:40:00)
-            durata_minuti: Durata del servizio in minuti (es. 25, 30, 45)
+            data_ora_iso: Data e ora ISO (es. 2026-10-02T19:30:00)
+            durata_minuti: Durata del servizio in minuti (es. 25)
         """
         try:
             data_ora_iso = normalizza_data_iso(data_ora_iso)
@@ -84,7 +89,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
             
             req_end = req_start + timedelta(minutes=durata)
 
-            # 1. Controllo sovrapposizioni su DB locale
+            # 1. Controllo DB locale
             occupati_db = db_session.query(SlotAgenda).filter(
                 SlotAgenda.azienda_id == azienda.id,
                 SlotAgenda.stato == "Occupato"
@@ -97,7 +102,6 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
                 if not slot_start:
                     continue
                 
-                # Cerca di estrarre la durata del servizio salvata (default 25 min se non specificato)
                 slot_dur = 25
                 if slot.servizio and "(" in str(slot.servizio) and "min)" in str(slot.servizio):
                     try:
@@ -107,9 +111,8 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
 
                 slot_end = slot_start + timedelta(minutes=slot_dur)
 
-                # Verifica sovrapposizione intervalli: StartA < EndB AND EndA > StartB
                 if req_start < slot_end and req_end > slot_start:
-                    return f"ORARIO OCCUPATO: L'orario {data_ora_iso} per {durata} minuti si sovrappone a un appuntamento già registrato (dalle {slot_start.strftime('%H:%M')} alle {slot_end.strftime('%H:%M')}). Proponi un orario libero al cliente."
+                    return f"ORARIO OCCUPATO: L'orario {data_ora_iso} per {durata} min si sovrappone a un altro appuntamento (dalle {slot_start.strftime('%H:%M')} alle {slot_end.strftime('%H:%M')}). Proponi un orario differente."
 
             # 2. Controllo Google Calendar
             if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
@@ -123,7 +126,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
                     cal_id = getattr(azienda, 'google_calendar_id', 'primary') or 'primary'
                     is_free = verifica_disponibilita_calendar(service, cal_id, data_ora_iso, durata)
                     if not is_free:
-                        return f"ORARIO OCCUPATO: L'orario {data_ora_iso} per {durata} minuti si sovrappone a un evento esistente su Google Calendar. Proponi un altro orario."
+                        return f"ORARIO OCCUPATO: L'orario {data_ora_iso} per {durata} min si sovrappone a un evento su Google Calendar."
                 except Exception as e:
                     print(f"Errore verifica Google Calendar: {e}")
 
@@ -134,18 +137,17 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
             return f"ORARIO LIBERO: L'orario {data_ora_iso} è disponibile."
 
     def conferma_e_prenota_appuntamento(data_ora_iso: str, servizio: str, nome_cliente: str, durata_minuti: int) -> str:
-        """Prenota l'appuntamento su Google Calendar e DB indicando il servizio e la durata in minuti.
+        """Prenota l'appuntamento sia su Google Calendar che sul DB locale.
         
         Args:
-            data_ora_iso: Data e ora in formato ISO (es. 2026-10-01T19:40:00)
-            servizio: Nome del servizio richiesto
+            data_ora_iso: Data e ora ISO (es. 2026-10-02T19:30:00)
+            servizio: Nome del servizio
             nome_cliente: Nome del cliente
             durata_minuti: Durata del servizio in minuti
         """
         data_ora_iso = normalizza_data_iso(data_ora_iso)
         durata = int(durata_minuti)
 
-        # 1. Google Calendar
         if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
             try:
                 service = get_calendar_service(
@@ -166,7 +168,6 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
             except Exception as e:
                 print(f"Errore inserimento Google Calendar: {e}")
 
-        # 2. DB locale
         slot = db_session.query(SlotAgenda).filter(
             SlotAgenda.azienda_id == azienda.id,
             SlotAgenda.data_ora.in_([data_ora_iso, data_ora_iso.replace("T", " "), data_ora_iso[:16]])
@@ -191,7 +192,41 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         db_session.commit()
         return f"CONFERMATO: Appuntamento registrato per {nome_cliente} alle {data_ora_iso} (durata {durata} min)."
 
-    tools_list = [controlla_orario_disponibile, conferma_e_prenota_appuntamento]
+    def cancella_appuntamento(data_ora_iso: str) -> str:
+        """Cancella e rimuove un appuntamento esistente dal DB locale e da Google Calendar.
+        
+        Args:
+            data_ora_iso: Data e ora dell'appuntamento da disdire (es. 2026-10-02T20:10:00)
+        """
+        data_ora_iso = normalizza_data_iso(data_ora_iso)
+
+        # 1. Cancellazione Google Calendar
+        if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
+            try:
+                service = get_calendar_service(
+                    azienda.google_access_token,
+                    azienda.google_refresh_token,
+                    os.getenv("GOOGLE_CLIENT_ID"),
+                    os.getenv("GOOGLE_CLIENT_SECRET")
+                )
+                cal_id = getattr(azienda, 'google_calendar_id', 'primary') or 'primary'
+                cancella_evento_calendar(service, cal_id, data_ora_iso)
+            except Exception as e:
+                print(f"Errore cancellazione Google Calendar: {e}")
+
+        # 2. Cancellazione/Liberazione nel DB locale
+        slots = db_session.query(SlotAgenda).filter(
+            SlotAgenda.azienda_id == azienda.id,
+            SlotAgenda.data_ora.in_([data_ora_iso, data_ora_iso.replace("T", " "), data_ora_iso[:16]])
+        ).all()
+
+        for s in slots:
+            db_session.delete(s)
+
+        db_session.commit()
+        return f"DISDETTO: L'appuntamento delle {data_ora_iso} è stato completamente cancellato sia dall'agenda DB che da Google Calendar."
+
+    tools_list = [controlla_orario_disponibile, conferma_e_prenota_appuntamento, cancella_appuntamento]
 
     max_retries = 3
     for attempt in range(max_retries):
