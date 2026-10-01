@@ -1,24 +1,23 @@
 import os
 import requests
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Form, Response, Depends, BackgroundTasks, HTTPException, Request, status
+from fastapi import FastAPI, Form, Depends, BackgroundTasks, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
 from mailer import send_email
 from fastapi.responses import HTMLResponse, RedirectResponse
-from twilio.twiml.messaging_response import MessagingResponse
-from twilio.rest import Client as TwilioClient
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text, Boolean, text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, Session
 from apscheduler.schedulers.background import BackgroundScheduler
 from passlib.context import CryptContext
 from jinja2 import Template
 
-from ai_service import genera_risposta_gemini, genera_bozza_email_b2b, trova_email_dominio_ia
+from ai_service import genera_bozza_email_b2b, trova_email_dominio_ia
 from dashboard import get_dashboard_routes
 from instagram import get_instagram_routes
 from admin_dashboard import get_admin_routes
 from whatsapp import get_whatsapp_routes
 
+# --- CONFIGURAZIONE SICUREZZA & HASHING ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def genera_hash_password(password: str) -> str:
@@ -55,7 +54,7 @@ class Azienda(Base):
     istruzioni_ia = Column(Text, nullable=False)
     creato_il = Column(DateTime, default=datetime.utcnow)
     
-    # Campi integrati per Google Calendar OAuth2
+    # Campi OAuth2 Google Calendar
     google_access_token = Column(Text, nullable=True)
     google_refresh_token = Column(Text, nullable=True)
     google_calendar_id = Column(String, nullable=True, default="primary")
@@ -69,7 +68,7 @@ class Contatto(Base):
     id = Column(Integer, primary_key=True, index=True)
     azienda_id = Column(Integer, ForeignKey("aziende.id"))
     numero_whatsapp = Column(String, index=True, nullable=False)
-    nome = Column(String, nullable=True) # Nome / Alias modificabile dall'utente
+    nome = Column(String, nullable=True)
     stato = Column(String, default="Nuovo Lead")
     bot_attivo = Column(Boolean, default=True)
     creato_il = Column(DateTime, default=datetime.utcnow)
@@ -102,7 +101,6 @@ class SlotAgenda(Base):
 
 class Utente(Base):
     __tablename__ = "utenti"
-
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
@@ -112,7 +110,7 @@ class Utente(Base):
 
     azienda = relationship("Azienda", back_populates="utenti")
 
-# Allineamento automatico colonne nel DB
+# Allineamento automatico tabelle DB
 try:
     with engine.connect() as conn:
         conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_access_token TEXT;"))
@@ -122,7 +120,6 @@ try:
         conn.execute(text("ALTER TABLE utenti ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
         conn.execute(text("ALTER TABLE utenti ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;"))
         
-        # Migrazione Contatto per Bot ON/OFF e Nome Contatto
         conn.execute(text("ALTER TABLE contatti ADD COLUMN IF NOT EXISTS bot_attivo BOOLEAN DEFAULT TRUE;"))
         conn.execute(text("ALTER TABLE contatti ADD COLUMN IF NOT EXISTS nome VARCHAR;"))
         conn.commit()
@@ -138,7 +135,7 @@ def get_db():
     finally:
         db.close()
 
-# --- HELPER PARSING DATA FLOTTANTE ---
+# --- HELPER PARSING DATA ---
 def parse_date_string(date_str: str) -> datetime:
     clean_str = str(date_str).strip().replace("Z", "")
     try:
@@ -167,6 +164,7 @@ def invia_promemoria_automatici():
             SlotAgenda.notifica_inviata == False
         ).all()
 
+        from twilio.rest import Client as TwilioClient
         twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
         for slot in appuntamenti_da_notificare:
@@ -189,21 +187,22 @@ def invia_promemoria_automatici():
                     slot.notifica_inviata = True
                     db.commit()
             except Exception as e:
-                print(f"Errore slot {slot.id}: {e}")
+                print(f"Errore invio promemoria slot {slot.id}: {e}")
     finally:
         db.close()
 
-# --- FASTAPI APP & ROUTERS ---
-app = FastAPI()
-
-app.include_router(get_dashboard_routes(get_db, Azienda, Contatto))
-app.include_router(get_instagram_routes(get_db, Azienda, Contatto, Messaggio, SlotAgenda))
-app.include_router(get_admin_routes(get_db, Azienda, Utente, genera_hash_password))
-app.include_router(get_whatsapp_routes(get_db, Azienda, Contatto, Messaggio, SlotAgenda))
+# --- INIZIALIZZAZIONE FASTAPI & SCHEDULER ---
+app = FastAPI(title="SaaS AI Automation Platform")
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(invia_promemoria_automatici, 'interval', minutes=15)
 scheduler.start()
+
+# --- REGISTRAZIONE ROUTERS COMPONENTI ---
+app.include_router(get_dashboard_routes(get_db, Azienda, Contatto))
+app.include_router(get_instagram_routes(get_db, Azienda, Contatto, Messaggio, SlotAgenda))
+app.include_router(get_admin_routes(get_db, Azienda, Utente, genera_hash_password))
+app.include_router(get_whatsapp_routes(get_db, Azienda, Contatto, Messaggio, SlotAgenda))
 
 # --- INTEGRATORE EVOLUTION API ---
 def invia_messaggio_evolution(istanza: str, numero_destinatario: str, testo: str):
@@ -227,6 +226,7 @@ def invia_messaggio_evolution(istanza: str, numero_destinatario: str, testo: str
         return None
 
 def elabora_e_rispondi_evolution(istanza: str, numero_cliente: str, testo_messaggio: str):
+    from ai_service import genera_risposta_gemini
     db = SessionLocal()
     try:
         azienda = db.query(Azienda).filter(
@@ -305,7 +305,7 @@ async def webhook_evolution(request: Request, background_tasks: BackgroundTasks)
             try:
                 contatto = db_session.query(Contatto).filter(Contatto.numero_whatsapp == numero_mittente).first()
                 if contatto and not contatto.bot_attivo:
-                    print(f"🛑 Bot DISATTIVATO da dashboard per il contatto {numero_mittente}. Risposta ignorata.")
+                    print(f"🛑 Bot DISATTIVATO per il contatto {numero_mittente}. Risposta ignorata.")
                     return {"status": "bot_disabled_for_contact"}
             except Exception as e:
                 print(f"⚠️ Errore durante la verifica dello stato del contatto nel DB: {e}")
@@ -332,12 +332,12 @@ async def webhook_evolution(request: Request, background_tasks: BackgroundTasks)
 
     return {"status": "event_ignored"}
 
-# --- ROTTE OAUTH2 GOOGLE CALENDAR ---
+# --- OAUTH2 GOOGLE CALENDAR ---
 
 @app.get("/auth/google/login")
 def google_login(azienda_id: int):
     if not GOOGLE_CLIENT_ID or not GOOGLE_REDIRECT_URI:
-        raise HTTPException(status_code=500, detail="Credenziali GOOGLE_CLIENT_ID o GOOGLE_REDIRECT_URI non configurate su Render.")
+        raise HTTPException(status_code=500, detail="Credenziali GOOGLE_CLIENT_ID o GOOGLE_REDIRECT_URI non configurate.")
         
     google_auth_url = (
         "https://accounts.google.com/o/oauth2/v2/auth?"
@@ -382,7 +382,7 @@ def google_callback(code: str, state: str, db: Session = Depends(get_db)):
 
     return {"status": "success", "message": f"Google Calendar collegato con successo per l'azienda ID: {azienda_id}!"}
 
-# --- ROTTE DI AUTENTICAZIONE (LOGIN / LOGOUT) ---
+# --- ROTTE AUTENTICAZIONE (LOGIN / LOGOUT) ---
 
 @app.get("/login", response_class=HTMLResponse)
 async def pagina_login(request: Request):
@@ -428,72 +428,17 @@ async def effettua_login(
 async def logout():
     response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
     response.delete_cookie(key="azienda_id")
+    response.delete_cookie(key="utente_id")
     return response
 
 @app.get("/", response_class=HTMLResponse)
-def home(request: Request, db: Session = Depends(get_db)):
+def home(request: Request):
     cookie_azienda = request.cookies.get("azienda_id")
     if cookie_azienda:
         return RedirectResponse(url=f"/dashboard/{cookie_azienda}", status_code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
-# --- WEBHOOK WHATSAPP (TWILIO) MULTI-AZIENDA ---
-@app.post("/whatsapp-webhook")
-async def whatsapp_webhook(From: str = Form(...), To: str = Form(...), Body: str = Form(...), db: Session = Depends(get_db)):
-    numero_cliente = From
-    numero_business = To
-    messaggio_utente = Body.strip()
-
-    azienda = db.query(Azienda).filter(Azienda.numero_whatsapp_business == numero_business).first()
-    
-    if not azienda:
-        istruzioni_default = (
-            "Sei l'assistente della Pasticceria.\n"
-            "Servizi: Torte 1kg (10€), Torte 2kg (15€), Cornetti (1.50€).\n"
-            "Orari: Lun-Sab dalle 7:00 alle 19:00.\n"
-            "Regola: Quando chiedono di prenotare, verifica la disponibilità e chiedi il nome."
-        )
-        azienda = Azienda(
-            nome="Pasticceria Demo",
-            numero_whatsapp_business=numero_business,
-            istruzioni_ia=istruzioni_default
-        )
-        db.add(azienda)
-        db.commit()
-        db.refresh(azienda)
-
-    contatto = db.query(Contatto).filter(
-        Contatto.numero_whatsapp == numero_cliente,
-        Contatto.azienda_id == azienda.id
-    ).first()
-
-    if not contatto:
-        contatto = Contatto(numero_whatsapp=numero_cliente, azienda_id=azienda.id, bot_attivo=True)
-        db.add(contatto)
-        db.commit()
-        db.refresh(contatto)
-
-    db.add(Messaggio(contatto_id=contatto.id, direzione="INBOUND", testo=messaggio_utente))
-    db.commit()
-
-    if not contatto.bot_attivo:
-        print(f"Bot disattivato per {numero_cliente}. Nessuna risposta inviata.")
-        resp = MessagingResponse()
-        return Response(content=str(resp), media_type="application/xml")
-
-    try:
-        risposta_ia = genera_risposta_gemini(azienda, contatto, messaggio_utente, db, SlotAgenda, Messaggio)
-    except Exception as e:
-        print(f"Errore genera_risposta_gemini: {e}")
-        risposta_ia = "Si è verificato un errore momentaneo nell'elaborazione della risposta."
-
-    db.add(Messaggio(contatto_id=contatto.id, direzione="OUTBOUND", testo=risposta_ia))
-    db.commit()
-
-    resp = MessagingResponse()
-    resp.message(risposta_ia)
-    return Response(content=str(resp), media_type="application/xml")
-
+# --- EMAIL MARKETING B2B API ---
 class EmailSchema(BaseModel):
     to_email: EmailStr
     subject: str
@@ -504,7 +449,6 @@ async def send_mail_endpoint(payload: EmailSchema, background_tasks: BackgroundT
     background_tasks.add_task(send_email, payload.to_email, payload.subject, payload.body)
     return {"status": "success", "message": "Email presa in carico e in fase di invio."}
 
-# --- GENERATORE DI BOZZE EMAIL B2B CON IA ---
 class DraftEmailRequest(BaseModel):
     azienda_id: int
     target_info: str
@@ -513,14 +457,12 @@ class DraftEmailRequest(BaseModel):
 @app.post("/api/generate-email-draft")
 async def generate_email_draft(data: DraftEmailRequest, db: Session = Depends(get_db)):
     azienda = db.query(Azienda).filter(Azienda.id == data.azienda_id).first()
-    result = genera_bozza_email_b2b(
+    return genera_bozza_email_b2b(
         azienda=azienda,
         target_info=data.target_info,
         offerta_azienda=data.offerta_azienda
     )
-    return result
 
-# --- ROTTA RICERCA EMAIL DOMINIO CON IA ---
 class DomainSearchRequest(BaseModel):
     domain: str
 
@@ -528,6 +470,7 @@ class DomainSearchRequest(BaseModel):
 async def find_domain_emails_endpoint(data: DomainSearchRequest):
     return trova_email_dominio_ia(data.domain)
 
+# --- ROTTE DI UTILITY E SYSTEM CHECK ---
 @app.get("/aziende-list")
 def lista_aziende(db: Session = Depends(get_db)):
     aziende = db.query(Azienda).all()
@@ -588,57 +531,3 @@ def setup_admin(db: Session = Depends(get_db)):
     
     db.commit()
     return {"status": "ok", "message": f"Admin configurato con successo per: {admin_email}"}
-
-
-
-
-# ==========================================
-# TEMPORANEO: CREAZIONE TABELLE + SUPER ADMIN
-# ==========================================
-import os
-
-@app.on_event("startup")
-def init_db_and_admin_once():
-    # Usiamo gli import già esistenti nel progetto
-    try:
-        from database import engine, Base, SessionLocal
-        from models import User
-        from auth import get_password_hash
-    except ModuleNotFoundError:
-        # Se il progetto usa la struttura con cartella principale/app
-        from app.database import engine, Base, SessionLocal
-        from app.models import User
-        from app.auth import get_password_hash
-
-    print("🔨 CREAZIONE TABELLE IN CORSO...")
-    Base.metadata.create_all(bind=engine)
-    
-    admin_email = os.getenv("ADMIN_EMAIL")
-    admin_password = os.getenv("ADMIN_PASSWORD")
-
-    if not admin_email or not admin_password:
-        print("⚠️ ADMIN_EMAIL o ADMIN_PASSWORD non trovate nelle variabili d'ambiente!")
-        return
-
-    db = SessionLocal()
-    try:
-        admin = db.query(User).filter(User.email == admin_email).first()
-        if not admin:
-            admin = User(
-                email=admin_email,
-                hashed_password=get_password_hash(admin_password),
-                is_admin=True,
-                is_active=True,
-                company_name="Super Admin"
-            )
-            db.add(admin)
-            db.commit()
-            print(f"✅ TABELLE CREATE E SUPER ADMIN CREATO ({admin_email})!")
-        else:
-            print(f"ℹ️ Super Admin ({admin_email}) già esistente.")
-    except Exception as e:
-        print(f"🔴 Errore durante l'inizializzazione del DB: {e}")
-        db.rollback()
-    finally:
-        db.close()
-# ==========================================
