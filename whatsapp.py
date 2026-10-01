@@ -47,7 +47,7 @@ def get_whatsapp_routes(get_db_func, AziendaModel, ContattoModel, MessaggioModel
 
         azienda = db.query(AziendaModel).filter(AziendaModel.numero_whatsapp_business == numero_business).first()
         if not azienda:
-            azienda = db.query(AziendaModel).first()
+            return Response(content="<Response></Response>", media_type="application/xml")
 
         contatto = db.query(ContattoModel).filter(
             ContattoModel.numero_whatsapp == numero_cliente,
@@ -91,7 +91,7 @@ def get_whatsapp_routes(get_db_func, AziendaModel, ContattoModel, MessaggioModel
             return {"status": "error", "message": "Payload JSON non valido"}
         
         numero_cliente = data.get("sender") or data.get("from") or data.get("chatId")
-        numero_business = data.get("instance_number") or data.get("to") or data.get("receiver")
+        instance_name = data.get("instance") or data.get("instance_name")
         messaggio_utente = (data.get("message") or data.get("body") or "").strip()
 
         if not numero_cliente or not messaggio_utente:
@@ -100,13 +100,11 @@ def get_whatsapp_routes(get_db_func, AziendaModel, ContattoModel, MessaggioModel
         numero_cliente_clean = numero_cliente.split("@")[0].replace("whatsapp:", "").replace("+", "")
         
         azienda = None
-        if numero_business:
-            azienda = db.query(AziendaModel).filter(AziendaModel.numero_whatsapp_business.contains(numero_business)).first()
-        if not azienda:
-            azienda = db.query(AziendaModel).first()
+        if instance_name:
+            azienda = db.query(AziendaModel).filter(AziendaModel.instance_name == instance_name).first()
 
         if not azienda:
-            return {"status": "error", "message": "Azienda non trovata"}
+            return {"status": "error", "message": "Azienda non trovata per l'istanza specificata"}
 
         contatto = db.query(ContattoModel).filter(
             ContattoModel.numero_whatsapp == numero_cliente_clean,
