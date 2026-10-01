@@ -57,42 +57,89 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
                 clean = f"{parts[0]}T{time_part}:00"
         return clean
 
-    # --- TOOLS CON DURATA DINAMICA ---
-    def controlla_orario_disponibile(data_ora_iso: str, durata_minuti: int = 30) -> str:
-        """Verifica se uno slot è libero sul Google Calendar e DB. Parametri: data_ora_iso (YYYY-MM-DDTHH:MM:SS), durata_minuti (int, es. 25, 40)."""
-        data_ora_iso = normalizza_data_iso(data_ora_iso)
-        durata = int(durata_minuti)
+    def parse_dt_safe(dt_str: str):
+        try:
+            iso_clean = normalizza_data_iso(dt_str)[:19]
+            return datetime.fromisoformat(iso_clean)
+        except Exception:
+            return None
+
+    # --- TOOLS CON CONTROLLO SOVRAPPOSIZIONI SICURO ---
+    def controlla_orario_disponibile(data_ora_iso: str, durata_minuti: int) -> str:
+        """Verifica se uno slot è libero sia sul Database locale che su Google Calendar per la durata indicata.
         
-        # 1. Controllo DB locale
-        slot_occupato = db_session.query(SlotAgenda).filter(
-            SlotAgenda.azienda_id == azienda.id,
-            SlotAgenda.stato == "Occupato",
-            SlotAgenda.data_ora.in_([data_ora_iso, data_ora_iso.replace("T", " "), data_ora_iso[:16]])
-        ).first()
+        Args:
+            data_ora_iso: Data e ora in formato ISO (es. 2026-10-01T19:40:00)
+            durata_minuti: Durata del servizio in minuti (es. 25, 30, 45)
+        """
+        try:
+            data_ora_iso = normalizza_data_iso(data_ora_iso)
+            durata = int(durata_minuti)
+            
+            req_start = parse_dt_safe(data_ora_iso)
+            if not req_start:
+                return f"ORARIO LIBERO: L'orario {data_ora_iso} è disponibile."
+            
+            req_end = req_start + timedelta(minutes=durata)
 
-        if slot_occupato:
-            return f"ORARIO OCCUPATO: L'orario {data_ora_iso} è occupato nel DB. Proponi un altro orario."
+            # 1. Controllo sovrapposizioni su DB locale
+            occupati_db = db_session.query(SlotAgenda).filter(
+                SlotAgenda.azienda_id == azienda.id,
+                SlotAgenda.stato == "Occupato"
+            ).all()
 
-        # 2. Controllo Google Calendar
-        if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
-            try:
-                service = get_calendar_service(
-                    azienda.google_access_token,
-                    azienda.google_refresh_token,
-                    os.getenv("GOOGLE_CLIENT_ID"),
-                    os.getenv("GOOGLE_CLIENT_SECRET")
-                )
-                cal_id = getattr(azienda, 'google_calendar_id', 'primary') or 'primary'
-                is_free = verifica_disponibilita_calendar(service, cal_id, data_ora_iso, durata)
-                if not is_free:
-                    return f"ORARIO OCCUPATO: L'orario {data_ora_iso} per una durata di {durata} minuti si sovrappone a un altro evento su Google Calendar. Proponi un orario differente."
-            except Exception as e:
-                print(f"Errore verifica Google Calendar: {e}")
+            for slot in occupati_db:
+                if not slot.data_ora:
+                    continue
+                slot_start = parse_dt_safe(slot.data_ora)
+                if not slot_start:
+                    continue
+                
+                # Cerca di estrarre la durata del servizio salvata (default 25 min se non specificato)
+                slot_dur = 25
+                if slot.servizio and "(" in str(slot.servizio) and "min)" in str(slot.servizio):
+                    try:
+                        slot_dur = int(str(slot.servizio).split("(")[1].split("min)")[0].strip())
+                    except Exception:
+                        slot_dur = 25
 
-        return f"ORARIO LIBERO: L'orario {data_ora_iso} per {durata} minuti è completamente disponibile."
+                slot_end = slot_start + timedelta(minutes=slot_dur)
 
-    def conferma_e_prenota_appuntamento(data_ora_iso: str, servizio: str, nome_cliente: str, durata_minuti: int = 30) -> str:
-        """Prenota l'appuntamento indicando servizio e durata in minuti."""
+                # Verifica sovrapposizione intervalli: StartA < EndB AND EndA > StartB
+                if req_start < slot_end and req_end > slot_start:
+                    return f"ORARIO OCCUPATO: L'orario {data_ora_iso} per {durata} minuti si sovrappone a un appuntamento già registrato (dalle {slot_start.strftime('%H:%M')} alle {slot_end.strftime('%H:%M')}). Proponi un orario libero al cliente."
+
+            # 2. Controllo Google Calendar
+            if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
+                try:
+                    service = get_calendar_service(
+                        azienda.google_access_token,
+                        azienda.google_refresh_token,
+                        os.getenv("GOOGLE_CLIENT_ID"),
+                        os.getenv("GOOGLE_CLIENT_SECRET")
+                    )
+                    cal_id = getattr(azienda, 'google_calendar_id', 'primary') or 'primary'
+                    is_free = verifica_disponibilita_calendar(service, cal_id, data_ora_iso, durata)
+                    if not is_free:
+                        return f"ORARIO OCCUPATO: L'orario {data_ora_iso} per {durata} minuti si sovrappone a un evento esistente su Google Calendar. Proponi un altro orario."
+                except Exception as e:
+                    print(f"Errore verifica Google Calendar: {e}")
+
+            return f"ORARIO LIBERO: L'orario {data_ora_iso} per {durata} minuti è completamente disponibile."
+            
+        except Exception as err:
+            print(f"Errore in controlla_orario_disponibile: {err}")
+            return f"ORARIO LIBERO: L'orario {data_ora_iso} è disponibile."
+
+    def conferma_e_prenota_appuntamento(data_ora_iso: str, servizio: str, nome_cliente: str, durata_minuti: int) -> str:
+        """Prenota l'appuntamento su Google Calendar e DB indicando il servizio e la durata in minuti.
+        
+        Args:
+            data_ora_iso: Data e ora in formato ISO (es. 2026-10-01T19:40:00)
+            servizio: Nome del servizio richiesto
+            nome_cliente: Nome del cliente
+            durata_minuti: Durata del servizio in minuti
+        """
         data_ora_iso = normalizza_data_iso(data_ora_iso)
         durata = int(durata_minuti)
 
