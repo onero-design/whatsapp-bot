@@ -50,6 +50,7 @@ class Azienda(Base):
     __tablename__ = "aziende"
     id = Column(Integer, primary_key=True, index=True)
     nome = Column(String, nullable=False)
+    instance_name = Column(String(100), unique=True, index=True, nullable=True)
     numero_whatsapp_business = Column(String, unique=True, index=True)
     istruzioni_ia = Column(Text, nullable=False)
     creato_il = Column(DateTime, default=datetime.utcnow)
@@ -74,7 +75,7 @@ class Contatto(Base):
     creato_il = Column(DateTime, default=datetime.utcnow)
     
     azienda = relationship("Azienda", back_populates="contatti")
-    messaggi = relationship("Messaggio", back_populates="contatto")
+    messaggi = relationship("Messaggio", back_populates="azienda")
 
 class Messaggio(Base):
     __tablename__ = "messaggi"
@@ -113,6 +114,7 @@ class Utente(Base):
 # Allineamento automatico tabelle DB
 try:
     with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS instance_name VARCHAR(100);"))
         conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_access_token TEXT;"))
         conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;"))
         conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_calendar_id VARCHAR DEFAULT 'primary';"))
@@ -229,14 +231,11 @@ def elabora_e_rispondi_evolution(istanza: str, numero_cliente: str, testo_messag
     from ai_service import genera_risposta_gemini
     db = SessionLocal()
     try:
-        azienda = db.query(Azienda).filter(
-            (Azienda.nome == istanza) | (Azienda.numero_whatsapp_business == numero_cliente)
-        ).first()
+        # Cerca l'azienda per corrispondenza esatta del nome istanza
+        azienda = db.query(Azienda).filter(Azienda.instance_name == istanza).first()
 
         if not azienda:
-            azienda = db.query(Azienda).first()
-
-        if not azienda:
+            print(f"🛑 Nessuna azienda associata all'istanza '{istanza}'. Messaggio ignorato.")
             return
 
         contatto = db.query(Contatto).filter(
@@ -323,10 +322,10 @@ async def webhook_evolution(request: Request, background_tasks: BackgroundTasks)
                 msg_obj.get("videoMessage", {}).get("caption")
             )
 
-        nome_istanza = data.get("instance", "pasticceria")
+        nome_istanza = data.get("instance")
 
-        if testo_messaggio and numero_mittente:
-            print(f"📩 Ricevuto messaggio da {numero_mittente} per {nome_istanza}: {testo_messaggio}")
+        if testo_messaggio and numero_mittente and nome_istanza:
+            print(f"📩 Ricevuto messaggio da {numero_mittente} per l'istanza '{nome_istanza}': {testo_messaggio}")
             background_tasks.add_task(elabora_e_rispondi_evolution, nome_istanza, numero_mittente, testo_messaggio)
             return {"status": "processing"}
 
@@ -474,7 +473,7 @@ async def find_domain_emails_endpoint(data: DomainSearchRequest):
 @app.get("/aziende-list")
 def lista_aziende(db: Session = Depends(get_db)):
     aziende = db.query(Azienda).all()
-    return [{"id": a.id, "nome": a.nome, "numero_whatsapp": a.numero_whatsapp_business} for a in aziende]
+    return [{"id": a.id, "nome": a.nome, "instance_name": a.instance_name, "numero_whatsapp": a.numero_whatsapp_business} for a in aziende]
 
 @app.get("/imposta-numero/{azienda_id}")
 def imposta_numero_sandbox(azienda_id: int, db: Session = Depends(get_db)):
@@ -507,6 +506,7 @@ def setup_admin(db: Session = Depends(get_db)):
     if not azienda_admin:
         azienda_admin = Azienda(
             nome="SaaS Management",
+            instance_name="saas-management",
             numero_whatsapp_business="whatsapp:+390000000000",
             istruzioni_ia="Azienda Amministratore SaaS"
         )
