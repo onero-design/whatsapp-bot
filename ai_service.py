@@ -42,7 +42,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         f"{azienda.istruzioni_ia}\n\n"
         f"REGOLE FONDAMENTALI PRENOTAZIONE E DISDETTA:\n"
         f"1. In base al servizio richiesto, STIMA LA DURATA IN MINUTI (es. 25, 30, 45, 60 minuti).\n"
-        f"2. PRIMA di proporre o confermare QUALSIASI orario, chiama SEMPRE `controlla_orario_disponibile(data_ora_iso, durata_minuti)` per verificare che sia davvero libero! NON INVENTARE O SUGGERIRE MAI ORARI SENZA AVERLI PRIMA VERIFICATI CON IL TOOL!\n"
+        f"2. PRIMA di proporre o confermare QUALSIASI orario, chiama SEMPRE `controlla_orario_disponibile(data_ora_iso, durata_minuti)` per verificare che sia davvero libero! NON INVENTARE O SUGGERIRE MAI ORARI SENZA HAVERLI PRIMA VERIFICATI CON IL TOOL!\n"
         f"3. Se il controllo risponde che l'orario è OCCUPATO, NON PRENOTARE! Proponi solo orari che hai già verificato essere LIBERI.\n"
         f"4. Solo se LIBERO, chiama `conferma_e_prenota_appuntamento(data_ora_iso, servizio, nome_cliente, durata_minuti)`.\n"
         f"5. SE IL CLIENTE VUOLE DISDIRE/ANNULLARE UN APPUNTAMENTO: Chiama IMMEDIATAMENTE il tool `cancella_appuntamento(data_ora_iso)`. NON confermare la disdetta a parole senza aver eseguito la chiamata al tool!\n"
@@ -73,12 +73,6 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
 
     # --- TOOLS DI AI SERVICE ---
     def controlla_orario_disponibile(data_ora_iso: str, durata_minuti: int) -> str:
-        """Verifica se uno slot è libero sul DB locale e su Google Calendar per la durata indicata.
-        
-        Args:
-            data_ora_iso: Data e ora ISO (es. 2026-10-02T19:30:00)
-            durata_minuti: Durata del servizio in minuti (es. 25)
-        """
         try:
             data_ora_iso = normalizza_data_iso(data_ora_iso)
             durata = int(durata_minuti)
@@ -137,14 +131,6 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
             return f"ORARIO LIBERO: L'orario {data_ora_iso} è disponibile."
 
     def conferma_e_prenota_appuntamento(data_ora_iso: str, servizio: str, nome_cliente: str, durata_minuti: int) -> str:
-        """Prenota l'appuntamento sia su Google Calendar che sul DB locale.
-        
-        Args:
-            data_ora_iso: Data e ora ISO (es. 2026-10-02T19:30:00)
-            servizio: Nome del servizio
-            nome_cliente: Nome del cliente
-            durata_minuti: Durata del servizio in minuti
-        """
         data_ora_iso = normalizza_data_iso(data_ora_iso)
         durata = int(durata_minuti)
 
@@ -193,11 +179,6 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         return f"CONFERMATO: Appuntamento registrato per {nome_cliente} alle {data_ora_iso} (durata {durata} min)."
 
     def cancella_appuntamento(data_ora_iso: str) -> str:
-        """Cancella e rimuove un appuntamento esistente dal DB locale e da Google Calendar.
-        
-        Args:
-            data_ora_iso: Data e ora dell'appuntamento da disdire (es. 2026-10-02T20:10:00)
-        """
         data_ora_iso = normalizza_data_iso(data_ora_iso)
 
         # 1. Cancellazione Google Calendar
@@ -249,7 +230,6 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
 
     return "Ho preso nota della tua richiesta. Un nostro operatore ti risponderà a brevissimo!"
 
-# --- GENERATORE DI BOZZE EMAIL B2B ---
 def genera_bozza_email_b2b(azienda, target_info: str, offerta_azienda: str) -> dict:
     if not client:
         return {"success": False, "error": "Servizio IA non disponibile."}
@@ -300,7 +280,6 @@ def genera_bozza_email_b2b(azienda, target_info: str, offerta_azienda: str) -> d
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# --- RICERCA EMAIL DOMINIO ---
 FORBIDDEN_DOMAINS = ["gmail.com", "yahoo.com", "yahoo.it", "hotmail.com", "hotmail.it", "outlook.com", "libero.it", "tin.it", "icloud.com"]
 
 def trova_email_dominio_ia(domain: str) -> dict:
