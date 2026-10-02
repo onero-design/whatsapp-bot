@@ -99,8 +99,9 @@ def cancella_evento_calendar(service, calendar_id: str, data_ora_iso: str):
         iso_inizio = parse_to_iso_with_tz(data_ora_iso)
         dt_inizio = datetime.fromisoformat(iso_inizio)
         
-        time_min = (dt_inizio - timedelta(minutes=5)).isoformat() + "Z"
-        time_max = (dt_inizio + timedelta(minutes=5)).isoformat() + "Z"
+        # Tolleranza di 30 minuti prima e dopo per trovare l'evento
+        time_min = (dt_inizio - timedelta(minutes=30)).isoformat()
+        time_max = (dt_inizio + timedelta(minutes=30)).isoformat()
 
         events_result = service.events().list(
             calendarId=calendar_id,
@@ -111,11 +112,16 @@ def cancella_evento_calendar(service, calendar_id: str, data_ora_iso: str):
         ).execute()
 
         events = events_result.get("items", [])
+        if not events:
+            print(f"Nessun evento trovato su Google Calendar tra {time_min} e {time_max}")
+            return False
+
         for event in events:
             service.events().delete(calendarId=calendar_id, eventId=event['id']).execute()
-            print(f"Evento Google Calendar eliminato: {event['id']}")
+            print(f"Evento eliminato con successo da Google Calendar: {event['id']}")
             return True
+
         return False
     except Exception as e:
-        print(f"Errore cancellazione Google Calendar: {e}")
+        print(f"Errore durante la cancellazione su Google Calendar: {e}")
         return False
