@@ -1,7 +1,10 @@
 import os
 from datetime import datetime, timedelta
+import pytz
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+
+ROME_TZ = pytz.timezone('Europe/Rome')
 
 def get_calendar_service(access_token: str, refresh_token: str, client_id: str, client_secret: str):
     creds = Credentials(
@@ -14,7 +17,7 @@ def get_calendar_service(access_token: str, refresh_token: str, client_id: str, 
     return build("calendar", "v3", credentials=creds)
 
 def parse_to_iso_with_tz(data_ora_iso: str) -> str:
-    """Garantisce il formato ISO8601 corretto senza spezzare l'ora o causare eccezioni Google API."""
+    """Garantisce il formato ISO8601 corretto per le chiamate API di Google Calendar."""
     clean_str = str(data_ora_iso).strip().replace("Z", "")
     if "T" not in clean_str and " " in clean_str:
         clean_str = clean_str.replace(" ", "T")
@@ -24,10 +27,7 @@ def parse_to_iso_with_tz(data_ora_iso: str) -> str:
         clean_str = f"{parts[0]}T{parts[1]}:00"
     
     base_iso = clean_str[:19]
-    dt = datetime.fromisoformat(base_iso)
-    
-    # Restituiamo il formato ISO leggibile da Google Calendar con fuso orario di Roma
-    return dt.strftime("%Y-%m-%dT%H:%M:%S")
+    return base_iso
 
 def verifica_disponibilita_calendar(service, calendar_id: str, data_ora_iso: str, durata_minuti: int = 30) -> bool:
     try:
@@ -35,9 +35,9 @@ def verifica_disponibilita_calendar(service, calendar_id: str, data_ora_iso: str
         dt_inizio = datetime.fromisoformat(iso_inizio)
         dt_fine = dt_inizio + timedelta(minutes=int(durata_minuti))
 
-        # Finestra di controllo
-        time_min = (dt_inizio - timedelta(hours=1)).isoformat() + "Z"
-        time_max = (dt_fine + timedelta(hours=1)).isoformat() + "Z"
+        # Finestra di controllo estesa con suffisso Z per Google API
+        time_min = (dt_inizio - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        time_max = (dt_fine + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         events_result = service.events().list(
             calendarId=calendar_id,
@@ -63,7 +63,6 @@ def verifica_disponibilita_calendar(service, calendar_id: str, data_ora_iso: str
                 ev_start = datetime.fromisoformat(start_raw[:19])
                 ev_end = datetime.fromisoformat(end_raw[:19])
 
-                # Controllo sovrapposizione
                 if dt_inizio < ev_end and dt_fine > ev_start:
                     return False # Occupato
 
@@ -81,11 +80,11 @@ def inserisci_evento_calendar(service, calendar_id: str, summary: str, descripti
         'summary': summary,
         'description': description,
         'start': {
-            'dateTime': dt_inizio.isoformat(),
+            'dateTime': dt_inizio.strftime("%Y-%m-%dT%H:%M:%S"),
             'timeZone': 'Europe/Rome',
         },
         'end': {
-            'dateTime': dt_fine.isoformat(),
+            'dateTime': dt_fine.strftime("%Y-%m-%dT%H:%M:%S"),
             'timeZone': 'Europe/Rome',
         },
     }
@@ -94,14 +93,17 @@ def inserisci_evento_calendar(service, calendar_id: str, summary: str, descripti
 
 
 def cancella_evento_calendar(service, calendar_id: str, data_ora_iso: str):
-    """Cerca ed elimina un evento da Google Calendar in base alla data e ora di inizio."""
+    """Cerca ed elimina un evento da Google Calendar formattando correttamente la query."""
     try:
         iso_inizio = parse_to_iso_with_tz(data_ora_iso)
         dt_inizio = datetime.fromisoformat(iso_inizio)
         
-        # Tolleranza di 30 minuti prima e dopo per trovare l'evento
-        time_min = (dt_inizio - timedelta(minutes=30)).isoformat()
-        time_max = (dt_inizio + timedelta(minutes=30)).isoformat()
+        # Finestra di ricerca +/- 30 minuti formattata in UTC per compatibilita API
+        dt_min = dt_inizio - timedelta(minutes=30)
+        dt_max = dt_inizio + timedelta(minutes=30)
+        
+        time_min = dt_min.strftime("%Y-%m-%dT%H:%M:%SZ")
+        time_max = dt_max.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         events_result = service.events().list(
             calendarId=calendar_id,
