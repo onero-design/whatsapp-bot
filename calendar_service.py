@@ -1,10 +1,7 @@
 import os
-from datetime import datetime, timedelta
-import pytz
+from datetime import datetime, timedelta, timezone
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-
-ROME_TZ = pytz.timezone('Europe/Rome')
 
 def get_calendar_service(access_token: str, refresh_token: str, client_id: str, client_secret: str):
     creds = Credentials(
@@ -26,8 +23,7 @@ def parse_to_iso_with_tz(data_ora_iso: str) -> str:
     if len(parts) == 2 and parts[1].count(":") == 1:
         clean_str = f"{parts[0]}T{parts[1]}:00"
     
-    base_iso = clean_str[:19]
-    return base_iso
+    return clean_str[:19]
 
 def verifica_disponibilita_calendar(service, calendar_id: str, data_ora_iso: str, durata_minuti: int = 30) -> bool:
     try:
@@ -35,7 +31,7 @@ def verifica_disponibilita_calendar(service, calendar_id: str, data_ora_iso: str
         dt_inizio = datetime.fromisoformat(iso_inizio)
         dt_fine = dt_inizio + timedelta(minutes=int(durata_minuti))
 
-        # Finestra di controllo estesa con suffisso Z per Google API
+        # Finestra di controllo in formato ISO UTC con Z finale
         time_min = (dt_inizio - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         time_max = (dt_fine + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -91,17 +87,17 @@ def inserisci_evento_calendar(service, calendar_id: str, summary: str, descripti
 
     return service.events().insert(calendarId=calendar_id, body=event).execute()
 
-
 def cancella_evento_calendar(service, calendar_id: str, data_ora_iso: str):
-    """Cerca ed elimina un evento da Google Calendar formattando correttamente la query."""
+    """Cerca ed elimina un evento da Google Calendar formattando correttamente i parametri ISO."""
     try:
         iso_inizio = parse_to_iso_with_tz(data_ora_iso)
         dt_inizio = datetime.fromisoformat(iso_inizio)
         
-        # Finestra di ricerca +/- 30 minuti formattata in UTC per compatibilita API
+        # Tolleranza di 30 minuti prima e dopo per trovare l'evento
         dt_min = dt_inizio - timedelta(minutes=30)
         dt_max = dt_inizio + timedelta(minutes=30)
         
+        # Formattazione con la Z finale richiesta da Google Calendar API per timeMin/timeMax
         time_min = dt_min.strftime("%Y-%m-%dT%H:%M:%SZ")
         time_max = dt_max.strftime("%Y-%m-%dT%H:%M:%SZ")
 
