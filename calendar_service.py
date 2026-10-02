@@ -88,18 +88,18 @@ def inserisci_evento_calendar(service, calendar_id: str, summary: str, descripti
     return service.events().insert(calendarId=calendar_id, body=event).execute()
 
 def cancella_evento_calendar(service, calendar_id: str, data_ora_iso: str):
-    """Cerca ed elimina un evento da Google Calendar formattando correttamente i parametri ISO."""
+    """Cerca ed elimina un evento da Google Calendar considerando l'offset italiano."""
     try:
         iso_inizio = parse_to_iso_with_tz(data_ora_iso)
         dt_inizio = datetime.fromisoformat(iso_inizio)
         
-        # Tolleranza di 30 minuti prima e dopo per trovare l'evento
-        dt_min = dt_inizio - timedelta(minutes=30)
-        dt_max = dt_inizio + timedelta(minutes=30)
+        # Tolleranza di 45 minuti prima e dopo
+        dt_min = dt_inizio - timedelta(minutes=45)
+        dt_max = dt_inizio + timedelta(minutes=45)
         
-        # Formattazione con la Z finale richiesta da Google Calendar API per timeMin/timeMax
-        time_min = dt_min.strftime("%Y-%m-%dT%H:%M:%SZ")
-        time_max = dt_max.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Formattazione con offset +02:00 per l'Italia (evita la Z di UTC)
+        time_min = dt_min.strftime("%Y-%m-%dT%H:%M:%S+02:00")
+        time_max = dt_max.strftime("%Y-%m-%dT%H:%M:%S+02:00")
 
         events_result = service.events().list(
             calendarId=calendar_id,
