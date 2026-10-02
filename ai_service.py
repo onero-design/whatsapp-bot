@@ -196,11 +196,13 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         """Cancella e rimuove un appuntamento esistente dal DB locale e da Google Calendar.
         
         Args:
-            data_ora_iso: Data e ora dell'appuntamento da disdire (es. 2026-10-02T20:10:00)
+            data_ora_iso: Data e ora dell'appuntamento da disdire (es. 2026-10-02T08:10:00)
         """
         data_ora_iso = normalizza_data_iso(data_ora_iso)
+        print(f"--- AVVIO CANCELLAZIONE PER: {data_ora_iso} ---")
 
         # 1. Cancellazione Google Calendar
+        esito_gcal = False
         if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
             try:
                 service = get_calendar_service(
@@ -210,7 +212,8 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
                     os.getenv("GOOGLE_CLIENT_SECRET")
                 )
                 cal_id = getattr(azienda, 'google_calendar_id', 'primary') or 'primary'
-                cancella_evento_calendar(service, cal_id, data_ora_iso)
+                esito_gcal = cancella_evento_calendar(service, cal_id, data_ora_iso)
+                print(f"Esito cancellazione Google Calendar: {esito_gcal}")
             except Exception as e:
                 print(f"Errore cancellazione Google Calendar: {e}")
 
@@ -224,30 +227,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
             db_session.delete(s)
 
         db_session.commit()
-        return f"DISDETTO: L'appuntamento delle {data_ora_iso} è stato completamente cancellato sia dall'agenda DB che da Google Calendar."
-
-    tools_list = [controlla_orario_disponibile, conferma_e_prenota_appuntamento, cancella_appuntamento]
-
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model="gemini-3.6-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(tools=tools_list)
-            )
-            if response.text:
-                return response.text.strip()
-            return "Ricevuto! Come posso aiutarti?"
-        except Exception as e:
-            err_str = str(e)
-            print(f"Errore Gemini (Tentativo {attempt + 1}): {err_str}")
-            if ("503" in err_str or "UNAVAILABLE" in err_str) and attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-            break
-
-    return "Ho preso nota della tua richiesta. Un nostro operatore ti risponderà a brevissimo!"
+        return f"DISDETTO: L'appuntamento delle {data_ora_iso} è stato cancellato (Google Calendar: {esito_gcal})."
 
 # --- GENERATORE DI BOZZE EMAIL B2B ---
 def genera_bozza_email_b2b(azienda, target_info: str, offerta_azienda: str) -> dict:
