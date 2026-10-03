@@ -83,12 +83,15 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
             
             req_end = req_start + timedelta(minutes=durata)
 
+            limite_massimo = getattr(azienda, 'max_prenotazioni_contemporanee', 1) or 1
+
             # 1. Controllo DB locale
             occupati_db = db_session.query(SlotAgenda).filter(
                 SlotAgenda.azienda_id == azienda.id,
                 SlotAgenda.stato == "Occupato"
             ).all()
 
+            sovrapposizioni_db = 0
             for slot in occupati_db:
                 if not slot.data_ora:
                     continue
@@ -106,7 +109,10 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
                 slot_end = slot_start + timedelta(minutes=slot_dur)
 
                 if req_start < slot_end and req_end > slot_start:
-                    return f"ORARIO OCCUPATO: L'orario {data_ora_iso} per {durata} min si sovrappone a un altro appuntamento (dalle {slot_start.strftime('%H:%M')} alle {slot_end.strftime('%H:%M')}). Proponi un orario differente."
+                    sovrapposizioni_db += 1
+
+            if sovrapposizioni_db >= limite_massimo:
+                return f"ORARIO OCCUPATO: L'orario {data_ora_iso} per {durata} min ha già raggiunto il limite massimo di {limite_massimo} prenotazioni contemporanee. Proponi un orario differente."
 
             # 2. Controllo Google Calendar
             if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
@@ -124,7 +130,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
                 except Exception as e:
                     print(f"Errore verifica Google Calendar: {e}")
 
-            return f"ORARIO LIBERO: L'orario {data_ora_iso} per {durata} minuti è completamente disponibile."
+            return f"ORARIO LIBERO: L'orario {data_ora_iso} per {durata} minuti è disponibile (Posti occupati: {sovrapposizioni_db}/{limite_massimo})."
             
         except Exception as err:
             print(f"Errore in controlla_orario_disponibile: {err}")
@@ -154,27 +160,15 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
             except Exception as e:
                 print(f"Errore inserimento Google Calendar: {e}")
 
-        slot = db_session.query(SlotAgenda).filter(
-            SlotAgenda.azienda_id == azienda.id,
-            SlotAgenda.data_ora.in_([data_ora_iso, data_ora_iso.replace("T", " "), data_ora_iso[:16]])
-        ).first()
-        
-        if not slot:
-            slot = SlotAgenda(
-                azienda_id=azienda.id, 
-                data_ora=data_ora_iso, 
-                stato="Occupato", 
-                cliente_nome=nome_cliente, 
-                numero_cliente=contatto.numero_whatsapp,
-                servizio=f"{servizio} ({durata} min)"
-            )
-            db_session.add(slot)
-        else:
-            slot.stato = "Occupato"
-            slot.cliente_nome = nome_cliente
-            slot.numero_cliente = contatto.numero_whatsapp
-            slot.servizio = f"{servizio} ({durata} min)"
-            
+        slot = SlotAgenda(
+            azienda_id=azienda.id, 
+            data_ora=data_ora_iso, 
+            stato="Occupato", 
+            cliente_nome=nome_cliente, 
+            numero_cliente=contatto.numero_whatsapp,
+            servizio=f"{servizio} ({durata} min)"
+        )
+        db_session.add(slot)
         db_session.commit()
         return f"CONFERMATO: Appuntamento registrato per {nome_cliente} alle {data_ora_iso} (durata {durata} min)."
 
