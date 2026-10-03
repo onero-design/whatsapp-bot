@@ -47,6 +47,12 @@ HTML_TEMPLATE = """
                                 <label class="form-label">Regole, Orari e Listino Servizi</label>
                                 <textarea name="istruzioni_ia" class="form-control" rows="8" required>{{ azienda.istruzioni_ia }}</textarea>
                             </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Posti / Operatori Contemporanei per Slot</label>
+                                <input type="number" name="max_prenotazioni_contemporanee" class="form-control" value="{{ azienda.max_prenotazioni_contemporanee or 1 }}" min="1">
+                                <small class="text-muted">Es: Imposta 2 se ci sono 2 barbieri/postazioni libere allo stesso orario.</small>
+                            </div>
                             <button type="submit" class="btn btn-success w-100">Salva Modifiche</button>
                         </form>
                     </div>
