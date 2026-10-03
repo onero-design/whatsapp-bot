@@ -394,7 +394,14 @@ def get_dashboard_routes(get_db_func, AziendaModel, ContattoModel):
         return HTMLResponse(content=template.render(azienda=azienda, contatti=contatti))
 
     @router.post("/{azienda_id}/update-prompt")
-    def update_prompt(request: Request, azienda_id: int, nome: str = Form(...), istruzioni_ia: str = Form(...), db: Session = Depends(get_db_func)):
+    def update_prompt(
+        request: Request, 
+        azienda_id: int, 
+        nome: str = Form(...), 
+        istruzioni_ia: str = Form(...), 
+        max_prenotazioni_contemporanee: int = Form(1),  # <-- 1. Aggiunto parametro dal form
+        db: Session = Depends(get_db_func)
+    ):
         cookie_azienda = request.cookies.get("azienda_id")
         if not cookie_azienda or int(cookie_azienda) != azienda_id:
             return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
@@ -403,7 +410,9 @@ def get_dashboard_routes(get_db_func, AziendaModel, ContattoModel):
         if azienda:
             azienda.nome = nome
             azienda.istruzioni_ia = istruzioni_ia
+            azienda.max_prenotazioni_contemporanee = max_prenotazioni_contemporanee  # <-- 2. Aggiunto salvataggio
             db.commit()
+
         return RedirectResponse(url=f"/dashboard/{azienda_id}", status_code=status.HTTP_303_SEE_OTHER)
 
     @router.post("/{azienda_id}/add-contact")
