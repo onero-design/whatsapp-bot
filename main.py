@@ -72,7 +72,7 @@ class Contatto(Base):
     numero_whatsapp = Column(String, index=True, nullable=False)
     nome = Column(String, nullable=True)
     stato = Column(String, default="Nuovo Lead")
-    bot_attivo = Column(Boolean, default=False)  # MODIFICATO: Default impostato su False (Disattivato)
+    bot_attivo = Column(Boolean, default=False)
     creato_il = Column(DateTime, default=datetime.utcnow)
     
     azienda = relationship("Azienda", back_populates="contatti")
@@ -97,6 +97,7 @@ class SlotAgenda(Base):
     cliente_nome = Column(String, nullable=True)
     numero_cliente = Column(String, nullable=True)
     servizio = Column(String, nullable=True)
+    operatore = Column(String, nullable=True)  # <-- AGGIUNTA COLONNA OPERATORE
     notifica_inviata = Column(Boolean, default=False)
     
     azienda = relationship("Azienda", back_populates="slot")
@@ -127,6 +128,9 @@ try:
         
         conn.execute(text("ALTER TABLE contatti ADD COLUMN IF NOT EXISTS bot_attivo BOOLEAN DEFAULT FALSE;"))
         conn.execute(text("ALTER TABLE contatti ADD COLUMN IF NOT EXISTS nome VARCHAR;"))
+
+        # Migrazione per aggiungere la colonna operatore se assente
+        conn.execute(text("ALTER TABLE slot_agenda ADD COLUMN IF NOT EXISTS operatore VARCHAR;"))
         conn.commit()
 except Exception as e:
     print(f"Errore durante la migrazione del DB: {e}")
