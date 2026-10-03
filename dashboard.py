@@ -72,9 +72,12 @@ HTML_TEMPLATE = """
                             </div>
                         </form>
                     </div>
+                    <div class="card-body p-2 border-bottom">
+                        <input type="text" id="searchContactsInput" onkeyup="filterContacts()" class="form-control form-control-sm" placeholder="🔍 Cerca nome o numero...">
+                    </div>
                     <div class="card-body p-0">
                         <div class="table-responsive">
-                            <table class="table table-striped mb-0 align-middle">
+                            <table class="table table-striped mb-0 align-middle" id="contactsTable">
                                 <thead>
                                     <tr>
                                         <th>Contatto / Numero</th>
@@ -85,11 +88,11 @@ HTML_TEMPLATE = """
                                 <tbody>
                                     {% for c in contatti %}
                                     <tr>
-                                        <td>
+                                        <td class="contact-info">
                                             <form action="/dashboard/{{ azienda.id }}/update-contact/{{ c.id }}" method="post" class="d-flex align-items-center gap-1">
-                                                <input type="text" name="nome" class="form-control form-control-sm border-0 bg-transparent fw-bold p-0" value="{{ c.nome if c.nome else 'Senza Nome' }}" placeholder="Rinomina...">
+                                                <input type="text" name="nome" class="form-control form-control-sm border-0 bg-transparent fw-bold p-0 contact-name" value="{{ c.nome if c.nome else 'Contatto Bot' }}" placeholder="Rinomina...">
                                                 <br>
-                                                <small class="text-muted">({{ c.numero_whatsapp }})</small>
+                                                <small class="text-muted contact-number">({{ c.numero_whatsapp }})</small>
                                                 <button type="submit" class="btn btn-sm btn-link p-0 text-decoration-none" title="Salva Nome">💾</button>
                                             </form>
                                         </td>
@@ -111,7 +114,7 @@ HTML_TEMPLATE = """
                                         </td>
                                     </tr>
                                     {% else %}
-                                    <tr>
+                                    <tr id="noContactsRow">
                                         <td colspan="3" class="text-center text-muted p-3">Nessun contatto salvato.</td>
                                     </tr>
                                     {% endfor %}
@@ -186,6 +189,30 @@ HTML_TEMPLATE = """
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+    function filterContacts() {
+        const input = document.getElementById("searchContactsInput");
+        const filter = input.value.toLowerCase();
+        const table = document.getElementById("contactsTable");
+        const trs = table.getElementsByTagName("tr");
+
+        for (let i = 1; i < trs.length; i++) {
+            const tr = trs[i];
+            if (tr.id === "noContactsRow") continue;
+            
+            const nameInput = tr.querySelector(".contact-name");
+            const numberSmall = tr.querySelector(".contact-number");
+            
+            const nameText = nameInput ? nameInput.value.toLowerCase() : "";
+            const numberText = numberSmall ? numberSmall.textContent.toLowerCase() : "";
+
+            if (nameText.includes(filter) || numberText.includes(filter)) {
+                tr.style.display = "";
+            } else {
+                tr.style.display = "none";
+            }
+        }
+    }
+
     async function generaBozzaEmail() {
         const targetEl = document.getElementById("targetInfo");
         const productEl = document.getElementById("myProduct");
@@ -389,9 +416,9 @@ def get_dashboard_routes(get_db_func, AziendaModel, ContattoModel):
         if not contatto:
             contatto = ContattoModel(
                 numero_whatsapp=clean_number,
-                nome=nome.strip() if nome else None,
+                nome=nome.strip() if nome else f"WA {clean_number}",
                 azienda_id=azienda_id,
-                bot_attivo=True
+                bot_attivo=False  # MODIFICATO: Disattivato di default
             )
             db.add(contatto)
         else:
