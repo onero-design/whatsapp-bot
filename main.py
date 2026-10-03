@@ -71,7 +71,7 @@ class Contatto(Base):
     numero_whatsapp = Column(String, index=True, nullable=False)
     nome = Column(String, nullable=True)
     stato = Column(String, default="Nuovo Lead")
-    bot_attivo = Column(Boolean, default=True)
+    bot_attivo = Column(Boolean, default=False)  # MODIFICATO: Default impostato su False (Disattivato)
     creato_il = Column(DateTime, default=datetime.utcnow)
     
     azienda = relationship("Azienda", back_populates="contatti")
@@ -122,7 +122,7 @@ try:
         conn.execute(text("ALTER TABLE utenti ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
         conn.execute(text("ALTER TABLE utenti ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;"))
         
-        conn.execute(text("ALTER TABLE contatti ADD COLUMN IF NOT EXISTS bot_attivo BOOLEAN DEFAULT TRUE;"))
+        conn.execute(text("ALTER TABLE contatti ADD COLUMN IF NOT EXISTS bot_attivo BOOLEAN DEFAULT FALSE;"))
         conn.execute(text("ALTER TABLE contatti ADD COLUMN IF NOT EXISTS nome VARCHAR;"))
         conn.commit()
 except Exception as e:
@@ -243,7 +243,12 @@ def elabora_e_rispondi_evolution(istanza: str, numero_cliente: str, testo_messag
         ).first()
 
         if not contatto:
-            contatto = Contatto(numero_whatsapp=numero_cliente, azienda_id=azienda.id, bot_attivo=True)
+            contatto = Contatto(
+                numero_whatsapp=numero_cliente, 
+                azienda_id=azienda.id, 
+                nome=f"WA {numero_cliente}", 
+                bot_attivo=False
+            )
             db.add(contatto)
             db.commit()
             db.refresh(contatto)
