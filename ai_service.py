@@ -42,9 +42,9 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
         f"{azienda.istruzioni_ia}\n\n"
         f"REGOLE FONDAMENTALI PRENOTAZIONE E DISDETTA:\n"
         f"1. In base al servizio richiesto, STIMA LA DURATA IN MINUTI (es. 25, 30, 45, 60 minuti).\n"
-        f"2. PRIMA di proporre o confermare QUALSIASI orario, chiama SEMPRE `controlla_orario_disponibile(data_ora_iso, durata_minuti)` per verificare che sia davvero libero! NON INVENTARE O SUGGERIRE MAI ORARI SENZA HAVERLI PRIMA VERIFICATI CON IL TOOL!\n"
-        f"3. Se il controllo risponde che l'orario è OCCUPATO, NON PRENOTARE! Proponi solo orari che hai già verificato essere LIBERI.\n"
-        f"4. Solo se LIBERO, chiama `conferma_e_prenota_appuntamento(data_ora_iso, servizio, nome_cliente, durata_minuti)`.\n"
+        f"2. PRIMA di proporre o confermare QUALSIASI orario, chiama SEMPRE `controlla_orario_disponibile(data_ora_iso, durata_minuti, operatore_richiesto)` per verificare la disponibilità del barbiere.\n"
+        f"3. Se il cliente non specifica il barbiere, controlla la disponibilità generale. Se Fabio è occupato e Gino è libero, avvisa il cliente che la prenotazione sarà con Gino.\n"
+        f"4. Se l'orario è libero, conferma chiamando `conferma_e_prenota_appuntamento(data_ora_iso, servizio, nome_cliente, durata_minuti, operatore)` passando il nome del barbiere assegnato (es. 'Fabio' o 'Gino').\n"
         f"5. SE IL CLIENTE VUOLE DISDIRE/ANNULLARE UN APPUNTAMENTO: Chiama IMMEDIATAMENTE il tool `cancella_appuntamento(data_ora_iso)`. NON confermare la disdetta a parole senza aver eseguito la chiamata al tool!\n"
         f"6. Formato data/ora per i tool: YYYY-MM-DDTHH:MM:SS.\n"
         f"7. ORARI DI CHIUSURA: L'appuntamento deve terminare prima della chiusura. Se chiudiamo alle 20:00 e il servizio dura 25 min, l'ultimo orario accettabile è le 19:30. Rifiuta qualsiasi richiesta oltre l'orario di chiusura o nei giorni di chiusura.\n\n"
@@ -72,7 +72,7 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
             return None
 
     # --- TOOLS DI AI SERVICE ---
-    def controlla_orario_disponibile(data_ora_iso: str, durata_minuti: int) -> str:
+    def controlla_orario_disponibile(data_ora_iso: str, durata_minuti: int, operatore_richiesto: str = None) -> str:
         try:
             data_ora_iso = normalizza_data_iso(data_ora_iso)
             durata = int(durata_minuti)
@@ -83,15 +83,13 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
             
             req_end = req_start + timedelta(minutes=durata)
 
-            limite_massimo = getattr(azienda, 'max_prenotazioni_contemporanee', 1) or 1
-
-            # 1. Controllo DB locale
+            # 1. Recupera gli slot occupati dal DB locale
             occupati_db = db_session.query(SlotAgenda).filter(
                 SlotAgenda.azienda_id == azienda.id,
                 SlotAgenda.stato == "Occupato"
             ).all()
 
-            sovrapposizioni_db = 0
+            operatori_occupati = []
             for slot in occupati_db:
                 if not slot.data_ora:
                     continue
@@ -108,37 +106,37 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
 
                 slot_end = slot_start + timedelta(minutes=slot_dur)
 
+                # Verifica la sovrapposizione oraria
                 if req_start < slot_end and req_end > slot_start:
-                    sovrapposizioni_db += 1
+                    if slot.operatore:
+                        operatori_occupati.append(slot.operatore.strip().capitalize())
 
-            if sovrapposizioni_db >= limite_massimo:
-                return f"ORARIO OCCUPATO: L'orario {data_ora_iso} per {durata} min ha già raggiunto il limite massimo di {limite_massimo} prenotazioni contemporanee. Proponi un orario differente."
+            # 2. Logica Barbieri (Fabio / Gino)
+            if operatore_richiesto:
+                op_scelto = operatore_richiesto.strip().capitalize()
+                if op_scelto in operatori_occupati:
+                    altri_liberi = [b for b in ["Fabio", "Gino"] if b not in operatori_occupati]
+                    if altri_liberi:
+                        return f"ORARIO OCCUPATO per {op_scelto}. Tuttavia {altri_liberi[0]} è LIBERO per le {data_ora_iso}. Proponi al cliente di prenotare con {altri_liberi[0]}."
+                    return f"ORARIO OCCUPATO: Tutti i barbieri sono occupati alle {data_ora_iso}."
+                return f"ORARIO LIBERO per {op_scelto} alle {data_ora_iso}."
 
-            # 2. Controllo Google Calendar
-            if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
-                try:
-                    service = get_calendar_service(
-                        azienda.google_access_token,
-                        azienda.google_refresh_token,
-                        os.getenv("GOOGLE_CLIENT_ID"),
-                        os.getenv("GOOGLE_CLIENT_SECRET")
-                    )
-                    cal_id = getattr(azienda, 'google_calendar_id', 'primary') or 'primary'
-                    is_free = verifica_disponibilita_calendar(service, cal_id, data_ora_iso, durata)
-                    if not is_free:
-                        return f"ORARIO OCCUPATO: L'orario {data_ora_iso} per {durata} min si sovrappone a un evento su Google Calendar."
-                except Exception as e:
-                    print(f"Errore verifica Google Calendar: {e}")
+            # Se l'utente non specifica l'operatore, preferenza di default: Fabio
+            if "Fabio" not in operatori_occupati:
+                return f"ORARIO LIBERO con Fabio per le {data_ora_iso}."
+            elif "Gino" not in operatori_occupati:
+                return f"ORARIO LIBERO: Fabio è occupato alle {data_ora_iso}, ma Gino è LIBERO. Informa il cliente che l'appuntamento sarà con Gino."
+            else:
+                return f"ORARIO OCCUPATO: Sia Fabio che Gino sono occupati alle {data_ora_iso}. Proponi un altro orario."
 
-            return f"ORARIO LIBERO: L'orario {data_ora_iso} per {durata} minuti è disponibile (Posti occupati: {sovrapposizioni_db}/{limite_massimo})."
-            
         except Exception as err:
             print(f"Errore in controlla_orario_disponibile: {err}")
             return f"ORARIO LIBERO: L'orario {data_ora_iso} è disponibile."
 
-    def conferma_e_prenota_appuntamento(data_ora_iso: str, servizio: str, nome_cliente: str, durata_minuti: int) -> str:
+    def conferma_e_prenota_appuntamento(data_ora_iso: str, servizio: str, nome_cliente: str, durata_minuti: int, operatore: str = "Fabio") -> str:
         data_ora_iso = normalizza_data_iso(data_ora_iso)
         durata = int(durata_minuti)
+        operatore_clean = operatore.strip().capitalize() if operatore else "Fabio"
 
         if hasattr(azienda, 'google_access_token') and azienda.google_access_token:
             try:
@@ -152,8 +150,8 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
                 inserisci_evento_calendar(
                     service, 
                     cal_id, 
-                    f"{servizio} - {nome_cliente}", 
-                    f"Prenotato via WhatsApp per {durata} min. Tel: {contatto.numero_whatsapp}", 
+                    f"{servizio} con {operatore_clean} - {nome_cliente}", 
+                    f"Prenotato via WhatsApp per {durata} min. Barbiere: {operatore_clean}. Tel: {contatto.numero_whatsapp}", 
                     data_ora_iso,
                     durata
                 )
@@ -166,11 +164,12 @@ def genera_risposta_gemini(azienda, contatto, messaggio_attuale: str, db_session
             stato="Occupato", 
             cliente_nome=nome_cliente, 
             numero_cliente=contatto.numero_whatsapp,
-            servizio=f"{servizio} ({durata} min)"
+            servizio=f"{servizio} ({durata} min)",
+            operatore=operatore_clean
         )
         db_session.add(slot)
         db_session.commit()
-        return f"CONFERMATO: Appuntamento registrato per {nome_cliente} alle {data_ora_iso} (durata {durata} min)."
+        return f"CONFERMATO: Appuntamento registrato per {nome_cliente} alle {data_ora_iso} con {operatore_clean} (durata {durata} min)."
 
     def cancella_appuntamento(data_ora_iso: str) -> str:
         data_ora_iso = normalizza_data_iso(data_ora_iso)
