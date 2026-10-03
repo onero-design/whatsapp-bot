@@ -55,7 +55,12 @@ def get_whatsapp_routes(get_db_func, AziendaModel, ContattoModel, MessaggioModel
         ).first()
 
         if not contatto:
-            contatto = ContattoModel(numero_whatsapp=numero_cliente, azienda_id=azienda.id, bot_attivo=True)
+            contatto = ContattoModel(
+                numero_whatsapp=numero_cliente, 
+                azienda_id=azienda.id, 
+                nome=f"WA {numero_cliente}", 
+                bot_attivo=False  # MODIFICATO: Default disattivato
+            )
             db.add(contatto)
             db.commit()
             db.refresh(contatto)
@@ -112,7 +117,12 @@ def get_whatsapp_routes(get_db_func, AziendaModel, ContattoModel, MessaggioModel
         ).first()
 
         if not contatto:
-            contatto = ContattoModel(numero_whatsapp=numero_cliente_clean, azienda_id=azienda.id, bot_attivo=True)
+            contatto = ContattoModel(
+                numero_whatsapp=numero_cliente_clean, 
+                azienda_id=azienda.id, 
+                nome=f"WA {numero_cliente_clean}", 
+                bot_attivo=False  # MODIFICATO: Default disattivato
+            )
             db.add(contatto)
             db.commit()
             db.refresh(contatto)
