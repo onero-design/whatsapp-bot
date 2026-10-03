@@ -53,6 +53,7 @@ class Azienda(Base):
     instance_name = Column(String(100), unique=True, index=True, nullable=True)
     numero_whatsapp_business = Column(String, unique=True, index=True)
     istruzioni_ia = Column(Text, nullable=False)
+    max_prenotazioni_contemporanee = Column(Integer, default=1)
     creato_il = Column(DateTime, default=datetime.utcnow)
     
     # Campi OAuth2 Google Calendar
@@ -62,7 +63,7 @@ class Azienda(Base):
     
     contatti = relationship("Contatto", back_populates="azienda")
     slot = relationship("SlotAgenda", back_populates="azienda")
-    utenti = relationship("Utente", back_populates="azienda") 
+    utenti = relationship("Utente", back_populates="azienda")
 
 class Contatto(Base):
     __tablename__ = "contatti"
@@ -118,6 +119,8 @@ try:
         conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_access_token TEXT;"))
         conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_refresh_token TEXT;"))
         conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS google_calendar_id VARCHAR DEFAULT 'primary';"))
+
+        conn.execute(text("ALTER TABLE aziende ADD COLUMN IF NOT EXISTS max_prenotazioni_contemporanee INTEGER DEFAULT 1;"))    
         
         conn.execute(text("ALTER TABLE utenti ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
         conn.execute(text("ALTER TABLE utenti ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;"))
