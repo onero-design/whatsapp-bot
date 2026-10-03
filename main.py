@@ -495,5 +495,3 @@ def imposta_numero_sandbox(azienda_id: int, db: Session = Depends(get_db)):
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health_check():
     return {"status": "ok"}
-
-
